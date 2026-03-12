@@ -1,0 +1,39 @@
+# Automata - Ride Booking Automation App
+
+## Phase 1: Project Foundation & UI
+- [ ] Set up Jetpack Compose with Material 3
+- [ ] Create data models (Task, TaskConfig, SavedLocation, RideApp)
+- [ ] Create local database with Room for persisting settings
+- [ ] Build main dashboard screen (task list with "Go" button)
+- [ ] Build task configuration screen (ride booking settings)
+- [ ] Build settings screen (saved locations, preferences)
+
+## Phase 2: Accessibility Service Core & Step Engine
+- [ ] Create `AutomataAccessibilityService` extending `AccessibilityService`
+- [ ] Configure accessibility service metadata XML
+- [ ] Add permissions & service declaration to AndroidManifest
+- [ ] Build node-finding utility helpers (find by text, ID, class)
+- [ ] Build action execution helpers (click, setText, scroll)
+- [ ] Build step sequencer — define automation as a list of Steps (waitForScreen → action → waitForResult) with per-step timeouts and retry logic
+- [ ] Build state machine (Idle → Running → WaitingForUI → StepComplete → Error → Done) to track automation progress
+- [ ] Add error recovery: stuck-detection (step timeout exceeded), back-out strategy (press back, return to known state), and graceful abort
+
+## Phase 3: First App End-to-End (PickMe)
+- [ ] Add PickMe layout/version detection (verify expected UI elements exist before proceeding)
+- [ ] Create PickMe automation script as a Step sequence (launch → set destination → select bike → get price)
+- [ ] Add persistent notification showing automation status
+- [ ] Add ride confirmation detection via NotificationListenerService
+- [ ] Test full PickMe pipeline on device end-to-end (including confirmation & status updates)
+
+## Phase 4: Second App & Orchestrator (Uber)
+- [ ] Add Uber layout/version detection
+- [ ] Create Uber automation script as a Step sequence
+- [ ] Test Uber pipeline on device end-to-end
+- [ ] Build orchestrator that runs both apps sequentially (PickMe then Uber), collects prices
+- [ ] Implement decision logic (cheapest price vs fastest confirmation)
+- [ ] Implement auto-cancel of losing app once ride is confirmed in winning app
+
+## Phase 5: Testing & Polish
+- [ ] Edge case handling (app not installed, no rides available, network error, UI changed unexpectedly)
+- [ ] Full two-app orchestration testing on device
+- [ ] Build walkthrough / first-run setup guide
