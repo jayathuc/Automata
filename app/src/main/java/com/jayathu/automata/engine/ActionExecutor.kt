@@ -7,6 +7,7 @@ import android.graphics.Rect
 import android.os.Bundle
 import android.util.DisplayMetrics
 import android.util.Log
+import android.view.WindowManager
 import android.view.accessibility.AccessibilityNodeInfo
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -99,6 +100,23 @@ object ActionExecutor {
         val result = setText(node, text)
         if (result) delay(waitMs)
         return result
+    }
+
+    // ===== Screen metrics =====
+
+    /**
+     * Returns (width, height) in pixels for the current display.
+     */
+    fun getScreenSize(service: AccessibilityService): Pair<Int, Int> {
+        val wm = service.getSystemService(AccessibilityService.WINDOW_SERVICE) as WindowManager
+        val metrics = DisplayMetrics()
+        @Suppress("DEPRECATION")
+        wm.defaultDisplay.getMetrics(metrics)
+        return Pair(metrics.widthPixels, metrics.heightPixels)
+    }
+
+    fun screenCenterX(service: AccessibilityService): Float {
+        return getScreenSize(service).first / 2f
     }
 
     // ===== Coordinate-based gestures (for Flutter/cross-platform apps) =====

@@ -347,7 +347,7 @@ object UberScript {
                     if (match?.bounds != null) {
                         val b = match.bounds!!
                         Log.i(TAG, "Tapping pickup result matching '$word': '${match.text}' at (540, ${b.centerY()})")
-                        ActionExecutor.tapAtCoordinates(service, 540f, b.centerY().toFloat())
+                        ActionExecutor.tapAtCoordinates(service, ActionExecutor.screenCenterX(service), b.centerY().toFloat())
                         return@AutomationStep StepResult.Success
                     }
                 }
@@ -359,7 +359,7 @@ object UberScript {
                 if (distanceBlock?.bounds != null) {
                     val b = distanceBlock.bounds!!
                     Log.i(TAG, "Tapping pickup distance line: '${distanceBlock.text}' at (540, ${b.centerY()})")
-                    ActionExecutor.tapAtCoordinates(service, 540f, b.centerY().toFloat())
+                    ActionExecutor.tapAtCoordinates(service, ActionExecutor.screenCenterX(service), b.centerY().toFloat())
                     return@AutomationStep StepResult.Success
                 }
 
@@ -368,7 +368,7 @@ object UberScript {
                 if (firstResult?.bounds != null) {
                     val b = firstResult.bounds!!
                     Log.i(TAG, "Tapping first pickup result: '${firstResult.text}' at (540, ${b.centerY()})")
-                    ActionExecutor.tapAtCoordinates(service, 540f, b.centerY().toFloat())
+                    ActionExecutor.tapAtCoordinates(service, ActionExecutor.screenCenterX(service), b.centerY().toFloat())
                     return@AutomationStep StepResult.Success
                 }
             }
@@ -444,7 +444,7 @@ object UberScript {
                         kotlinx.coroutines.delay(2000)
                     } else {
                         Log.i(TAG, "Tapping top area to edit route")
-                        ActionExecutor.tapAtCoordinates(service, 540f, 200f)
+                        ActionExecutor.tapAtCoordinates(service, ActionExecutor.screenCenterX(service), ActionExecutor.getScreenSize(service).second * 0.085f)
                         kotlinx.coroutines.delay(2000)
                     }
 
@@ -607,7 +607,7 @@ object UberScript {
                 if (distanceBlock?.bounds != null) {
                     val b = distanceBlock.bounds!!
                     Log.i(TAG, "Tapping distance/address line via OCR: '${distanceBlock.text}' at (540, ${b.centerY()})")
-                    ActionExecutor.tapAtCoordinates(service, 540f, b.centerY().toFloat())
+                    ActionExecutor.tapAtCoordinates(service, ActionExecutor.screenCenterX(service), b.centerY().toFloat())
                     return@AutomationStep StepResult.Success
                 }
 
@@ -617,7 +617,7 @@ object UberScript {
                     if (match?.bounds != null) {
                         val b = match.bounds!!
                         Log.i(TAG, "Tapping result matching '$word': '${match.text}' at (540, ${b.centerY()})")
-                        ActionExecutor.tapAtCoordinates(service, 540f, b.centerY().toFloat())
+                        ActionExecutor.tapAtCoordinates(service, ActionExecutor.screenCenterX(service), b.centerY().toFloat())
                         return@AutomationStep StepResult.Success
                     }
                 }
@@ -628,7 +628,7 @@ object UberScript {
                 if (firstResult?.bounds != null) {
                     val b = firstResult.bounds!!
                     Log.i(TAG, "Tapping first result: '${firstResult.text}' at (540, ${b.centerY()})")
-                    ActionExecutor.tapAtCoordinates(service, 540f, b.centerY().toFloat())
+                    ActionExecutor.tapAtCoordinates(service, ActionExecutor.screenCenterX(service), b.centerY().toFloat())
                     return@AutomationStep StepResult.Success
                 }
             }
@@ -951,7 +951,7 @@ object UberScript {
 
                         if (match?.bounds != null) {
                             Log.i(TAG, "Selecting pickup result: '${match.text}'")
-                            ActionExecutor.tapAtCoordinates(service, 540f, match.bounds!!.centerY().toFloat())
+                            ActionExecutor.tapAtCoordinates(service, ActionExecutor.screenCenterX(service), match.bounds!!.centerY().toFloat())
                             kotlinx.coroutines.delay(2500)
 
                             // After selecting pickup, Uber may auto-navigate to ride options
@@ -971,7 +971,7 @@ object UberScript {
                                     if (routeBlock?.bounds != null) {
                                         ActionExecutor.tapAtCoordinates(service, routeBlock.bounds!!.centerX().toFloat(), routeBlock.bounds!!.centerY().toFloat())
                                     } else {
-                                        ActionExecutor.tapAtCoordinates(service, 540f, 200f)
+                                        ActionExecutor.tapAtCoordinates(service, ActionExecutor.screenCenterX(service), ActionExecutor.getScreenSize(service).second * 0.085f)
                                     }
                                     kotlinx.coroutines.delay(2000)
                                 }
@@ -1022,7 +1022,7 @@ object UberScript {
 
                 if (match?.bounds != null) {
                     Log.i(TAG, "Selecting destination result: '${match.text}'")
-                    ActionExecutor.tapAtCoordinates(service, 540f, match.bounds!!.centerY().toFloat())
+                    ActionExecutor.tapAtCoordinates(service, ActionExecutor.screenCenterX(service), match.bounds!!.centerY().toFloat())
                 } else {
                     Log.w(TAG, "No destination results found")
                     return@AutomationStep StepResult.Retry("No destination results")

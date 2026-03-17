@@ -36,7 +36,9 @@ object PickMeScript {
 
     private const val TAG = "PickMeScript"
     private const val PACKAGE = "com.pickme.passenger"
-    private const val SCREEN_CENTER_X = 540f
+    /** Screen center X, computed dynamically per-action from actual display metrics. */
+    private fun screenCenterX(service: android.accessibilityservice.AccessibilityService): Float =
+        ActionExecutor.screenCenterX(service)
 
     /**
      * Fix OCR-dropped decimal points in prices.
@@ -338,8 +340,8 @@ object PickMeScript {
                 }
             }
 
-            Log.i(TAG, "Tapping search bar at ($SCREEN_CENTER_X, $tapY)")
-            ActionExecutor.tapAtCoordinates(service, SCREEN_CENTER_X, tapY)
+            Log.i(TAG, "Tapping search bar at (${screenCenterX(service)}, $tapY)")
+            ActionExecutor.tapAtCoordinates(service, screenCenterX(service), tapY)
 
             // Verify PICKUP/DROP screen appeared
             kotlinx.coroutines.delay(2000)
@@ -381,8 +383,8 @@ object PickMeScript {
 
                 if (pickupBlocks.isNotEmpty() && pickupBlocks.first().bounds != null) {
                     val b = pickupBlocks.first().bounds!!
-                    Log.i(TAG, "Tapping PICKUP field at ($SCREEN_CENTER_X, ${b.centerY()})")
-                    ActionExecutor.tapAtCoordinates(service, SCREEN_CENTER_X, b.centerY().toFloat())
+                    Log.i(TAG, "Tapping PICKUP field at (${screenCenterX(service)}, ${b.centerY()})")
+                    ActionExecutor.tapAtCoordinates(service, screenCenterX(service), b.centerY().toFloat())
                     kotlinx.coroutines.delay(800)
                 } else if (yourLocationBlocks.isNotEmpty() && yourLocationBlocks.first().bounds != null) {
                     val b = yourLocationBlocks.first().bounds!!
@@ -451,8 +453,8 @@ object PickMeScript {
                     val match = resultCandidates.find { it.text.contains(word, ignoreCase = true) }
                     if (match?.bounds != null) {
                         val b = match.bounds!!
-                        Log.i(TAG, "Tapping pickup result matching '$word': '${match.text}' at ($SCREEN_CENTER_X, ${b.centerY()})")
-                        ActionExecutor.tapAtCoordinates(service, SCREEN_CENTER_X, b.centerY().toFloat())
+                        Log.i(TAG, "Tapping pickup result matching '$word': '${match.text}' at (${screenCenterX(service)}, ${b.centerY()})")
+                        ActionExecutor.tapAtCoordinates(service, screenCenterX(service), b.centerY().toFloat())
                         return@AutomationStep StepResult.Success
                     }
                 }
@@ -461,8 +463,8 @@ object PickMeScript {
                 val firstResult = resultCandidates.firstOrNull()
                 if (firstResult?.bounds != null) {
                     val b = firstResult.bounds!!
-                    Log.i(TAG, "Tapping first pickup result: '${firstResult.text}' at ($SCREEN_CENTER_X, ${b.centerY()})")
-                    ActionExecutor.tapAtCoordinates(service, SCREEN_CENTER_X, b.centerY().toFloat())
+                    Log.i(TAG, "Tapping first pickup result: '${firstResult.text}' at (${screenCenterX(service)}, ${b.centerY()})")
+                    ActionExecutor.tapAtCoordinates(service, screenCenterX(service), b.centerY().toFloat())
                     return@AutomationStep StepResult.Success
                 }
             }
@@ -504,8 +506,8 @@ object PickMeScript {
                     // The "Where are you going?" input is to the right of "DROP" label
                     // Tap at center X of screen, at the DROP label's Y
                     val tapY = dropBounds.centerY().toFloat()
-                    Log.i(TAG, "Tapping DROP field at ($SCREEN_CENTER_X, $tapY)")
-                    ActionExecutor.tapAtCoordinates(service, SCREEN_CENTER_X, tapY)
+                    Log.i(TAG, "Tapping DROP field at (${screenCenterX(service)}, $tapY)")
+                    ActionExecutor.tapAtCoordinates(service, screenCenterX(service), tapY)
                     kotlinx.coroutines.delay(800)
                 } else if (whereBlocks.isNotEmpty() && whereBlocks.first().bounds != null) {
                     val b = whereBlocks.first().bounds!!
@@ -597,8 +599,8 @@ object PickMeScript {
                     val match = resultCandidates.find { it.text.contains(word, ignoreCase = true) }
                     if (match?.bounds != null) {
                         val b = match.bounds!!
-                        Log.i(TAG, "Tapping result matching '$word': '${match.text}' at ($SCREEN_CENTER_X, ${b.centerY()})")
-                        ActionExecutor.tapAtCoordinates(service, SCREEN_CENTER_X, b.centerY().toFloat())
+                        Log.i(TAG, "Tapping result matching '$word': '${match.text}' at (${screenCenterX(service)}, ${b.centerY()})")
+                        ActionExecutor.tapAtCoordinates(service, screenCenterX(service), b.centerY().toFloat())
                         return@AutomationStep StepResult.Success
                     }
                 }
@@ -608,8 +610,8 @@ object PickMeScript {
                 val firstResult = resultCandidates.firstOrNull()
                 if (firstResult?.bounds != null) {
                     val b = firstResult.bounds!!
-                    Log.i(TAG, "Tapping first result: '${firstResult.text}' at ($SCREEN_CENTER_X, ${b.centerY()})")
-                    ActionExecutor.tapAtCoordinates(service, SCREEN_CENTER_X, b.centerY().toFloat())
+                    Log.i(TAG, "Tapping first result: '${firstResult.text}' at (${screenCenterX(service)}, ${b.centerY()})")
+                    ActionExecutor.tapAtCoordinates(service, screenCenterX(service), b.centerY().toFloat())
                     return@AutomationStep StepResult.Success
                 }
             }
@@ -704,12 +706,12 @@ object PickMeScript {
                     if (blocks.isNotEmpty() && blocks.first().bounds != null) {
                         searchTapY = blocks.first().bounds!!.centerY().toFloat()
                     }
-                    Log.i(TAG, "Tapping search bar at ($SCREEN_CENTER_X, $searchTapY)")
-                    ActionExecutor.tapAtCoordinates(service, SCREEN_CENTER_X, searchTapY)
+                    Log.i(TAG, "Tapping search bar at (${screenCenterX(service)}, $searchTapY)")
+                    ActionExecutor.tapAtCoordinates(service, screenCenterX(service), searchTapY)
                     kotlinx.coroutines.delay(2000)
                 }
             } else {
-                ActionExecutor.tapAtCoordinates(service, SCREEN_CENTER_X, searchTapY)
+                ActionExecutor.tapAtCoordinates(service, screenCenterX(service), searchTapY)
                 kotlinx.coroutines.delay(2000)
             }
 
@@ -722,7 +724,7 @@ object PickMeScript {
                     val yourLocBlocks = ScreenReader.findTextBlocks(pickupOcr, "Your Location")
                     if (pickupBlocks.isNotEmpty() && pickupBlocks.first().bounds != null) {
                         val b = pickupBlocks.first().bounds!!
-                        ActionExecutor.tapAtCoordinates(service, SCREEN_CENTER_X, b.centerY().toFloat())
+                        ActionExecutor.tapAtCoordinates(service, screenCenterX(service), b.centerY().toFloat())
                         kotlinx.coroutines.delay(800)
                     } else if (yourLocBlocks.isNotEmpty() && yourLocBlocks.first().bounds != null) {
                         val b = yourLocBlocks.first().bounds!!
@@ -758,7 +760,7 @@ object PickMeScript {
 
                         if (match?.bounds != null) {
                             Log.i(TAG, "Selecting pickup result: '${match.text}'")
-                            ActionExecutor.tapAtCoordinates(service, SCREEN_CENTER_X, match.bounds!!.centerY().toFloat())
+                            ActionExecutor.tapAtCoordinates(service, screenCenterX(service), match.bounds!!.centerY().toFloat())
                             kotlinx.coroutines.delay(3000)
                         }
                     }
@@ -774,7 +776,7 @@ object PickMeScript {
                 val whereBlocks = ScreenReader.findTextBlocks(dropOcr, "Where are you going")
                 if (dropBlocks.isNotEmpty() && dropBlocks.first().bounds != null) {
                     val b = dropBlocks.first().bounds!!
-                    ActionExecutor.tapAtCoordinates(service, SCREEN_CENTER_X, b.centerY().toFloat())
+                    ActionExecutor.tapAtCoordinates(service, screenCenterX(service), b.centerY().toFloat())
                     kotlinx.coroutines.delay(800)
                 } else if (whereBlocks.isNotEmpty() && whereBlocks.first().bounds != null) {
                     val b = whereBlocks.first().bounds!!
@@ -819,7 +821,7 @@ object PickMeScript {
 
                 if (match?.bounds != null) {
                     Log.i(TAG, "Selecting destination result: '${match.text}'")
-                    ActionExecutor.tapAtCoordinates(service, SCREEN_CENTER_X, match.bounds!!.centerY().toFloat())
+                    ActionExecutor.tapAtCoordinates(service, screenCenterX(service), match.bounds!!.centerY().toFloat())
                 } else {
                     Log.w(TAG, "No destination results found")
                     return@AutomationStep StepResult.Retry("No destination results")
