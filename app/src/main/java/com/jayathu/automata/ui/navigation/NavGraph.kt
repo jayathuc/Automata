@@ -1,6 +1,7 @@
 package com.jayathu.automata.ui.navigation
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.navigation.NavHostController
@@ -64,10 +65,16 @@ fun AutomataNavGraph(
             arguments = listOf(navArgument("taskId") { type = NavType.LongType })
         ) { backStackEntry ->
             val taskId = backStackEntry.arguments?.getLong("taskId") ?: return@composable
-            viewModel.loadTaskConfig(taskId)
+
+            LaunchedEffect(taskId) {
+                viewModel.clearEditingConfig()
+                viewModel.loadTaskConfig(taskId)
+            }
+
             val config by viewModel.editingConfig.collectAsState()
 
             config?.let { existingConfig ->
+                if (existingConfig.id != taskId) return@let
                 TaskConfigScreen(
                     existingConfig = existingConfig,
                     onSave = { updated ->
@@ -90,8 +97,11 @@ fun AutomataNavGraph(
 
         composable(Routes.SETTINGS) {
             val savedLocations by viewModel.savedLocations.collectAsState()
+            val autoEnableLocation by viewModel.autoEnableLocation.collectAsState()
             SettingsScreen(
                 savedLocations = savedLocations,
+                autoEnableLocation = autoEnableLocation,
+                onAutoEnableLocationChange = { viewModel.setAutoEnableLocation(it) },
                 onAddLocation = { viewModel.addSavedLocation(it) },
                 onDeleteLocation = { viewModel.deleteSavedLocation(it) },
                 onBack = { navController.popBackStack() }

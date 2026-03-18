@@ -69,6 +69,9 @@ dependencies {
     // ML Kit OCR
     implementation(libs.mlkit.text.recognition)
 
+    // Splash Screen
+    implementation(libs.androidx.splashscreen)
+
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

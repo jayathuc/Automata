@@ -1,10 +1,14 @@
 package com.jayathu.automata.ui
 
 import android.app.Application
+import android.location.LocationManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.jayathu.automata.data.db.AutomataDatabase
+import com.jayathu.automata.data.PreferencesManager
 import com.jayathu.automata.data.model.SavedLocation
 import com.jayathu.automata.data.model.TaskConfig
 import com.jayathu.automata.data.repository.AutomataRepository
@@ -41,6 +45,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     )
 
     private val notificationManager = AutomationNotificationManager(application)
+    private val preferencesManager = PreferencesManager(application)
+
+    private val _autoEnableLocation = MutableStateFlow(true)
+    val autoEnableLocation: StateFlow<Boolean> = _autoEnableLocation.asStateFlow()
+
+    fun setAutoEnableLocation(enabled: Boolean) {
+        preferencesManager.autoEnableLocation = enabled
+        _autoEnableLocation.value = enabled
+    }
 
     val taskConfigs: StateFlow<List<TaskConfig>> = repository.getAllTaskConfigs()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -55,6 +68,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val automationState: StateFlow<AutomationUiState> = _automationState.asStateFlow()
 
     init {
+        _autoEnableLocation.value = preferencesManager.autoEnableLocation
+
         // Observe accessibility service state changes for notification updates
         viewModelScope.launch {
             AutomataAccessibilityService.instance.collect { service ->
@@ -123,6 +138,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (errors.isNotEmpty()) {
             _automationState.value = _automationState.value.copy(
                 result = AutomationResult.Failed("", errors.joinToString(". ") + ".", emptyMap())
+            )
+            return
+        }
+
+        // Check network connectivity
+        if (!isNetworkAvailable(context)) {
+            _automationState.value = _automationState.value.copy(
+                result = AutomationResult.Failed("", "No internet connection. Connect to Wi-Fi or mobile data and try again.", emptyMap())
+            )
+            return
+        }
+
+        // Check location services (only block if auto-enable is off — the script handles it when on)
+        if (!isLocationEnabled(context) && !_autoEnableLocation.value) {
+            _automationState.value = _automationState.value.copy(
+                result = AutomationResult.Failed("", "Location services are turned off. Turn on Location in your phone settings or enable auto-enable in Settings.", emptyMap())
             )
             return
         }
@@ -241,5 +272,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             repository.deleteSavedLocation(location)
         }
+    }
+
+    private fun isNetworkAvailable(context: android.content.Context): Boolean {
+        val cm = context.getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val network = cm.activeNetwork ?: return false
+        val capabilities = cm.getNetworkCapabilities(network) ?: return false
+        return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+    }
+
+    private fun isLocationEnabled(context: android.content.Context): Boolean {
+        val lm = context.getSystemService(android.content.Context.LOCATION_SERVICE) as LocationManager
+        return lm.isProviderEnabled(LocationManager.GPS_PROVIDER) ||
+                lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
     }
 }

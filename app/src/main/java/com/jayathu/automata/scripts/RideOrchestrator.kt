@@ -71,8 +71,8 @@ class RideOrchestrator(
         }
 
         // Phase 3: Book the winner
-        // Use quick booking steps — the apps are still in memory on the ride options screen,
-        // so we just bring the winner to foreground and tap Book Now.
+        // The comparison overlay auto-dismisses after 8s and is hidden during
+        // screenshots so it doesn't interfere with OCR-based booking taps.
         if (config.enablePickMe) {
             steps.addAll(buildConditionalBookingSteps(
                 RideApp.PICKME,
@@ -82,7 +82,7 @@ class RideOrchestrator(
         if (config.enableUber) {
             steps.addAll(buildConditionalBookingSteps(
                 RideApp.UBER,
-                UberScript.buildQuickBookingSteps(context, config.rideType)
+                UberScript.buildQuickBookingSteps(context, config.rideType, config.destinationAddress)
             ))
         }
 
@@ -91,40 +91,42 @@ class RideOrchestrator(
 
     /**
      * Wraps each booking step so it only runs if this app is the winner.
-     * If not the winner, the step is skipped.
+     * Every step independently checks collectedData["winner"] — the single
+     * source of truth — so the decision never depends on mutable closure state.
      */
     private fun buildConditionalBookingSteps(
         app: RideApp,
         bookingSteps: List<AutomationStep>
     ): List<AutomationStep> {
-        // Shared flag so waitConditions know whether to use original condition or skip.
-        // The "gate" step below sets this before any booking step's waitCondition runs.
-        val isWinner = object { @Volatile var checked = false; @Volatile var value = false }
+        // Flag used ONLY by waitCondition (which can't access stepContext) to
+        // short-circuit waits for the non-winner.  The action always re-verifies
+        // against collectedData["winner"] independently.
+        val skipWait = object { @Volatile var value = false }
 
         val gateStep = AutomationStep(
-            name = "Check winner: ${app.displayName}",
+            name = "[${app.displayName}] Check winner",
             waitCondition = { true },
             timeoutMs = 2_000,
             delayAfterMs = 0,
             action = { _, stepContext ->
                 val winner = stepContext.collectedData["winner"]
-                isWinner.checked = true
-                isWinner.value = (winner == app.displayName)
-                if (isWinner.value) {
-                    Log.i(TAG, "${app.displayName} is the winner — proceeding with booking")
+                val isWinner = (winner == app.displayName)
+                skipWait.value = !isWinner
+                Log.i(TAG, "[${app.displayName}] Gate check: collectedData[winner]='$winner', " +
+                        "app.displayName='${app.displayName}', isWinner=$isWinner")
+                if (isWinner) {
                     StepResult.Success
                 } else {
-                    Log.i(TAG, "${app.displayName} is NOT the winner ($winner) — skipping all booking steps")
-                    StepResult.Skip("Not the winner")
+                    StepResult.Skip("Not the winner (winner=$winner)")
                 }
             }
         )
 
         val wrappedSteps = bookingSteps.map { step ->
             AutomationStep(
-                name = step.name,
+                name = "[${app.displayName}] ${step.name}",
                 waitCondition = { root ->
-                    if (isWinner.checked && !isWinner.value) {
+                    if (skipWait.value) {
                         true // Not the winner — pass through so action can skip
                     } else {
                         step.waitCondition(root) // Winner — use original wait
@@ -135,8 +137,11 @@ class RideOrchestrator(
                 delayBeforeMs = step.delayBeforeMs,
                 maxRetries = step.maxRetries,
                 action = { root, stepContext ->
-                    if (isWinner.checked && !isWinner.value) {
-                        StepResult.Skip("Not the winner")
+                    // Always verify against the authoritative source
+                    val winner = stepContext.collectedData["winner"]
+                    if (winner != app.displayName) {
+                        Log.d(TAG, "[${app.displayName}] Skipping '${step.name}': winner=$winner")
+                        StepResult.Skip("Not the winner (winner=$winner)")
                     } else {
                         step.action(root, stepContext)
                     }
@@ -210,17 +215,25 @@ class RideOrchestrator(
             val pickMeEta = pickMeEtaRaw?.toIntOrNull()
             val uberEta = uberEtaRaw?.toIntOrNull()
 
-            Log.i(TAG, "Price comparison - PickMe: $pickMePrice, Uber: $uberPrice")
+            Log.i(TAG, "Price comparison - PickMe: raw='$pickMeRaw' parsed=$pickMePrice, Uber: raw='$uberRaw' parsed=$uberPrice")
             Log.i(TAG, "ETA comparison - PickMe: ${pickMeEta ?: "N/A"} min, Uber: ${uberEta ?: "N/A"} min")
+            Log.i(TAG, "Decision mode: $decisionMode")
 
             val winner = when {
                 pickMePrice != null && uberPrice != null -> {
                     when (decisionMode) {
-                        DecisionMode.CHEAPEST -> if (pickMePrice <= uberPrice) RideApp.PICKME else RideApp.UBER
+                        DecisionMode.CHEAPEST -> {
+                            val w = if (pickMePrice < uberPrice) RideApp.PICKME
+                                    else if (uberPrice < pickMePrice) RideApp.UBER
+                                    else RideApp.PICKME // tie → PickMe
+                            Log.i(TAG, "CHEAPEST: PickMe=$pickMePrice vs Uber=$uberPrice → winner=${w.displayName}")
+                            w
+                        }
                         DecisionMode.FASTEST -> {
-                            when {
-                                pickMeEta != null && uberEta != null ->
+                            val w = when {
+                                pickMeEta != null && uberEta != null -> {
                                     if (pickMeEta <= uberEta) RideApp.PICKME else RideApp.UBER
+                                }
                                 pickMeEta != null -> RideApp.PICKME
                                 uberEta != null -> RideApp.UBER
                                 // No ETA from either app — fall back to cheapest
@@ -229,11 +242,19 @@ class RideOrchestrator(
                                     if (pickMePrice <= uberPrice) RideApp.PICKME else RideApp.UBER
                                 }
                             }
+                            Log.i(TAG, "FASTEST: PickMe ETA=$pickMeEta vs Uber ETA=$uberEta → winner=${w.displayName}")
+                            w
                         }
                     }
                 }
-                pickMePrice != null -> RideApp.PICKME
-                uberPrice != null -> RideApp.UBER
+                pickMePrice != null -> {
+                    Log.i(TAG, "Only PickMe price available ($pickMePrice), Uber price missing")
+                    RideApp.PICKME
+                }
+                uberPrice != null -> {
+                    Log.i(TAG, "Only Uber price available ($uberPrice), PickMe price missing")
+                    RideApp.UBER
+                }
                 else -> null
             }
 
@@ -262,9 +283,9 @@ class RideOrchestrator(
                     }
                 }
 
-                Log.i(TAG, "Winner: $winnerName$detail — booking now")
                 stepContext.collectedData["winner"] = winnerName
                 stepContext.collectedData["winner_summary"] = "$winnerName$detail"
+                Log.i(TAG, "Winner stored: collectedData[winner]='${stepContext.collectedData["winner"]}', summary='$winnerName$detail' — booking now")
 
                 // Fire heads-up popup notification with comparison results
                 onComparisonReady?.invoke(stepContext.collectedData.toMap())

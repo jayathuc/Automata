@@ -92,7 +92,9 @@ object PickMeScript {
             tapDropFieldAndEnterDestination(destination),
             selectSearchResult(destination),
             waitForRideOptions(),
-            selectRideType(mappedType),
+            // No need to tap/select ride type here — readPriceViaOcr uses
+            // X-proximity matching to find the price next to the ride type label.
+            // Selecting wastes time and can trigger unnecessary UI animations.
             readPriceViaOcr(mappedType)
         ))
 

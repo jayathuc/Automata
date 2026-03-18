@@ -45,15 +45,22 @@ object UberScript {
             tapWhereToField()
         )
 
-        // Set pickup location if provided
         if (pickupAddress.isNotBlank()) {
+            // Custom pickup — sequential flow matching Uber's UI:
+            // 1. Type pickup → select from dropdown (Uber stays on search screen)
+            // 2. Type destination → select from dropdown (Uber navigates to ride options)
             steps.add(enterPickupAddress(pickupAddress))
             steps.add(selectPickupSearchResult(pickupAddress))
+            steps.add(enterDestination(destination))
+            steps.add(selectSearchResult(destination))
+        } else {
+            // No custom pickup: enter destination first directly in the "Where to?" field.
+            // This avoids the cached destination issue entirely since we go straight to dest.
+            steps.add(enterDestination(destination))
+            steps.add(selectSearchResult(destination))
         }
 
         steps.addAll(listOf(
-            enterDestination(destination),
-            selectSearchResult(destination),
             waitForRideOptions(),
             readPrice(mapRideType(rideType))
         ))
@@ -71,7 +78,8 @@ object UberScript {
             selectRideType(mapRideType(rideType)),
             tapChooseRide(mapRideType(rideType)),
             handleForMePrompt(),
-            tapConfirmPickup()
+            tapConfirmPickup(),
+            handleNotForSomeoneElsePrompt()
         )
     }
 
@@ -79,12 +87,16 @@ object UberScript {
      * Quick booking steps — brings Uber back to foreground (still on ride options screen)
      * and taps Choose ride. Used when the app was already navigated during price reading.
      */
-    fun buildQuickBookingSteps(context: Context, rideType: String): List<AutomationStep> {
+    fun buildQuickBookingSteps(context: Context, rideType: String, destination: String = ""): List<AutomationStep> {
+        // resumeApp preserves app state (ride options screen with correct destination),
+        // so no need to verify destination — just select ride type and book.
         return listOf(
             resumeApp(context),
+            selectRideType(mapRideType(rideType)),
             tapChooseRide(mapRideType(rideType)),
             handleForMePrompt(),
-            tapConfirmPickup()
+            tapConfirmPickup(),
+            handleNotForSomeoneElsePrompt()
         )
     }
 
@@ -144,6 +156,158 @@ object UberScript {
             } else {
                 StepResult.Failure("Could not resume Uber")
             }
+        }
+    )
+
+    /**
+     * After resuming Uber, verify the ride options screen still shows the correct destination.
+     * Uber sometimes replaces the destination with a cached location (e.g. "Home") when
+     * the app is brought back from the background.
+     * If the destination is wrong, navigate back to search and re-enter it.
+     */
+    private fun verifyDestinationAfterResume(destination: String) = AutomationStep(
+        name = "Verify destination after resume",
+        waitCondition = { root ->
+            root.packageName?.toString() == PACKAGE
+        },
+        timeoutMs = 30_000,
+        delayAfterMs = 1500,
+        maxRetries = 5,
+        action = { root, _ ->
+            val service = AutomataAccessibilityService.instance.value
+                ?: return@AutomationStep StepResult.Failure("No accessibility service")
+
+            val ocr = ScreenReader.captureAndRead(service)
+            if (ocr == null) {
+                return@AutomationStep StepResult.Retry("Could not read screen")
+            }
+
+            // Check we're on ride options
+            val hasPrice = ocr.fullText.contains("LKR", true) || ocr.fullText.contains("Rs", true)
+            val hasVehicle = ocr.fullText.contains("Moto", true) ||
+                    ocr.fullText.contains("Tuk", true) || ocr.fullText.contains("Zip", true)
+
+            if (!hasPrice || !hasVehicle) {
+                Log.w(TAG, "Not on ride options screen after resume — retrying")
+                return@AutomationStep StepResult.Retry("Not on ride options screen")
+            }
+
+            // Check if the correct destination is shown on screen (route info at the top)
+            val destWords = destination.split(" ").filter { it.length > 2 }
+            val topBlocks = ocr.blocks.filter { block ->
+                val top = block.bounds?.top ?: 0
+                top in 0..400
+            }
+            val topText = topBlocks.joinToString(" ") { it.text }
+            val hasCorrectDest = destWords.any { word ->
+                topText.contains(word, ignoreCase = true)
+            }
+
+            if (hasCorrectDest) {
+                Log.i(TAG, "Destination verified after resume: found destination words in '$topText'")
+                return@AutomationStep StepResult.Success
+            }
+
+            // Wrong destination — Uber swapped it (e.g. to "Home")
+            Log.w(TAG, "Wrong destination after resume! Route shows: '$topText', expected words from: '$destination'")
+            Log.i(TAG, "Navigating back to fix destination...")
+
+            // Tap the route/destination area at the top to go back to search
+            val routeBlock = topBlocks.filter { it.text.length > 3 }.lastOrNull { it.bounds != null }
+            if (routeBlock?.bounds != null) {
+                val b = routeBlock.bounds!!
+                Log.i(TAG, "Tapping route area: '${routeBlock.text}' at (${b.centerX()}, ${b.centerY()})")
+                ActionExecutor.tapAtCoordinates(service, b.centerX().toFloat(), b.centerY().toFloat())
+            } else {
+                Log.i(TAG, "Tapping top area to edit route")
+                ActionExecutor.tapAtCoordinates(service, ActionExecutor.screenCenterX(service), ActionExecutor.getScreenSize(service).second * 0.085f)
+            }
+            kotlinx.coroutines.delay(2000)
+
+            // Now on search screen — find and fill destination field
+            val freshRoot = service.getRootNode() ?: root
+            val editFields = NodeFinder.findAllNodesRecursive(freshRoot) { it.isEditable }
+            Log.i(TAG, "Found ${editFields.size} editable field(s) after navigating back")
+
+            val destField = if (editFields.size >= 2) {
+                editFields.find { f ->
+                    val t = f.text?.toString() ?: ""
+                    t.isEmpty() || t.contains("Where to", true) || t.contains("Search", true) ||
+                    t.contains("destination", true)
+                } ?: editFields.last()
+            } else {
+                editFields.firstOrNull()
+            }
+
+            if (destField != null) {
+                ActionExecutor.tapNodeCenter(service, destField)
+                kotlinx.coroutines.delay(500)
+
+                val freshRoot2 = service.getRootNode() ?: freshRoot
+                val freshFields = NodeFinder.findAllNodesRecursive(freshRoot2) { it.isEditable }
+                val activeField = freshFields.find { f ->
+                    val t = f.text?.toString() ?: ""
+                    t.isEmpty() || t.contains("Where to", true) || t.contains("Search", true) ||
+                    t.contains("destination", true)
+                } ?: freshFields.lastOrNull() ?: destField
+
+                ActionExecutor.click(activeField)
+                kotlinx.coroutines.delay(300)
+                activeField.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_FOCUS)
+                ActionExecutor.clearText(activeField)
+                ActionExecutor.setTextWithRetrigger(activeField, destination)
+                Log.i(TAG, "Re-entered destination: $destination")
+                kotlinx.coroutines.delay(1500)
+
+                // Select search result
+                val searchOcr = ScreenReader.captureAndRead(service)
+                if (searchOcr != null) {
+                    val skipTexts = setOf("Pick-up now", "For me", "Search in a different", "Plan your trip", "Where to")
+                    val screenHeight = ActionExecutor.getScreenSize(service).second
+                    val maxY = (screenHeight * 0.65).toInt()
+                    // Get bottom of editable fields to avoid tapping the text field itself
+                    val freshRoot2 = service.getRootNode() ?: root
+                    val editFields = NodeFinder.findAllNodesRecursive(freshRoot2) { it.isEditable }
+                    val fieldsBottom = editFields.maxOfOrNull { f ->
+                        val r = android.graphics.Rect(); f.getBoundsInScreen(r); r.bottom
+                    } ?: (screenHeight * 0.30).toInt()
+                    val minY = fieldsBottom + 20
+                    val candidates = searchOcr.blocks.filter { block ->
+                        val top = block.bounds?.top ?: 0
+                        top in minY..maxY && block.text.length > 3 &&
+                        skipTexts.none { block.text.contains(it, true) }
+                    }.sortedBy { it.bounds?.top ?: Int.MAX_VALUE }
+
+                    val leftTapX = ActionExecutor.getScreenSize(service).first * 0.25f
+
+                    // Word match first
+                    val wordMatch = destWords.firstNotNullOfOrNull { word ->
+                        candidates.find { it.text.contains(word, true) }
+                    }
+                    val distMatch = candidates.find { it.text.contains(Regex("\\d+\\.?\\d*\\s*mi\\b")) }
+                    val match = wordMatch ?: distMatch ?: candidates.firstOrNull()
+
+                    if (match?.bounds != null) {
+                        val b = match.bounds!!
+                        Log.i(TAG, "Selecting corrected destination result: '${match.text}'")
+                        ActionExecutor.tapAtCoordinates(service, leftTapX, b.centerY().toFloat())
+                        kotlinx.coroutines.delay(3000)
+
+                        // Verify we're back on ride options
+                        val afterOcr = ScreenReader.captureAndRead(service)
+                        if (afterOcr != null) {
+                            val backOnRideOptions = (afterOcr.fullText.contains("LKR", true) || afterOcr.fullText.contains("Rs", true)) &&
+                                    (afterOcr.fullText.contains("Moto", true) || afterOcr.fullText.contains("Tuk", true) || afterOcr.fullText.contains("Zip", true))
+                            if (backOnRideOptions) {
+                                Log.i(TAG, "Destination corrected, back on ride options")
+                                return@AutomationStep StepResult.Success
+                            }
+                        }
+                    }
+                }
+            }
+
+            StepResult.Retry("Could not correct destination after resume")
         }
     )
 
@@ -279,10 +443,14 @@ object UberScript {
             val pickupField = allEditFields.firstOrNull()
             if (pickupField != null) {
                 Log.i(TAG, "Setting pickup on first field, current text='${pickupField.text}'")
+                // Tap the field like a real user to activate the text listener
+                ActionExecutor.click(pickupField)
+                kotlinx.coroutines.delay(300)
                 pickupField.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_FOCUS)
                 ActionExecutor.clearText(pickupField)
-                if (ActionExecutor.setText(pickupField, pickupAddress)) {
+                if (ActionExecutor.setTextWithRetrigger(pickupField, pickupAddress)) {
                     Log.i(TAG, "Pickup address set: $pickupAddress")
+                    // Wait for search results to load before the next step selects one
                     kotlinx.coroutines.delay(1500)
                     return@AutomationStep StepResult.Success
                 }
@@ -300,14 +468,75 @@ object UberScript {
         waitCondition = { root ->
             root.packageName?.toString() == PACKAGE
         },
-        timeoutMs = 10_000,
+        timeoutMs = 15_000,
         delayAfterMs = 3000,
-        maxRetries = 4,
+        maxRetries = 5,
         action = { root, _ ->
             val service = AutomataAccessibilityService.instance.value
                 ?: return@AutomationStep StepResult.Failure("No accessibility service")
 
+            // If already on ride options, Uber resolved pickup automatically — skip
+            val preCheckOcr = ScreenReader.captureAndRead(service)
+            if (preCheckOcr != null) {
+                val hasPrice = preCheckOcr.fullText.contains("LKR", true) || preCheckOcr.fullText.contains("Rs", true)
+                val hasVehicle = preCheckOcr.fullText.contains("Moto", true) ||
+                        preCheckOcr.fullText.contains("Tuk", true) || preCheckOcr.fullText.contains("Zip", true)
+                if (hasPrice && hasVehicle) {
+                    Log.i(TAG, "Already on ride options — pickup was auto-resolved, skipping")
+                    return@AutomationStep StepResult.Skip("Pickup auto-resolved")
+                }
+            }
+
             val pickupWords = pickupAddress.split(" ").filter { it.length > 2 }
+            val screenHeight = ActionExecutor.getScreenSize(service).second
+            val resultsMaxY = (screenHeight * 0.65).toInt()
+
+            // Find the bottom of the editable fields so we only tap search results BELOW them.
+            val editableFields = NodeFinder.findAllNodesRecursive(root) { it.isEditable }
+            val fieldsBottomY = editableFields.maxOfOrNull { field ->
+                val rect = android.graphics.Rect()
+                field.getBoundsInScreen(rect)
+                rect.bottom
+            } ?: (screenHeight * 0.30).toInt()
+            val resultsMinY = fieldsBottomY + 20
+            Log.i(TAG, "Pickup results Y range: $resultsMinY..$resultsMaxY (fields bottom: $fieldsBottomY)")
+
+            val skipTexts = setOf("Pick-up now", "For me", "Search in a different",
+                "Plan your trip", "Get more results", "Where to", "Saved places",
+                "Set location on map")
+
+            // Wait for search results to stabilize (Uber loads them progressively)
+            var stableOcr: com.jayathu.automata.engine.OcrResult? = null
+            var previousFirstResult: String? = null
+            for (attempt in 1..3) {
+                val snapshot = ScreenReader.captureAndRead(service)
+                if (snapshot != null) {
+                    val candidates = snapshot.blocks.filter { block ->
+                        val top = block.bounds?.top ?: 0
+                        top in resultsMinY..resultsMaxY && block.text.length > 3 &&
+                        skipTexts.none { block.text.contains(it, ignoreCase = true) }
+                    }.sortedBy { it.bounds?.top ?: Int.MAX_VALUE }
+
+                    val firstText = candidates.firstOrNull()?.text
+                    Log.i(TAG, "Pickup stabilization attempt $attempt: first='$firstText', candidates=${candidates.size}")
+
+                    if (firstText != null && firstText == previousFirstResult) {
+                        stableOcr = snapshot
+                        break
+                    }
+                    // If we found a word match, use immediately
+                    val hasWordMatch = candidates.any { c ->
+                        pickupWords.any { word -> c.text.contains(word, ignoreCase = true) }
+                    }
+                    if (hasWordMatch && attempt >= 2) {
+                        stableOcr = snapshot
+                        break
+                    }
+                    previousFirstResult = firstText
+                    stableOcr = snapshot
+                }
+                if (attempt < 3) kotlinx.coroutines.delay(1000)
+            }
 
             // Try accessibility — find clickable, NON-editable results
             val clickableResults = NodeFinder.findAllNodesRecursive(root) {
@@ -326,49 +555,57 @@ object UberScript {
                 }
             }
 
-            // OCR fallback
-            val ocr = ScreenReader.captureAndRead(service)
+            // OCR approach
+            val ocr = stableOcr
             if (ocr != null) {
                 Log.i(TAG, "Pickup search results OCR: ${ocr.fullText.take(500)}")
 
-                val skipTexts = setOf("Pick-up now", "For me", "Search in a different",
-                    "Plan your trip", "Get more results", "Where to")
-                val resultCandidates = ocr.blocks
-                    .filter { block ->
-                        val top = block.bounds?.top ?: 0
-                        top in 700..1200 && block.text.length > 3 &&
-                        skipTexts.none { block.text.contains(it, ignoreCase = true) }
+                // Log all blocks for debugging
+                for (block in ocr.blocks) {
+                    if (block.bounds != null) {
+                        Log.i(TAG, "OCR block: '${block.text.take(60)}' at Y=${block.bounds!!.top}-${block.bounds!!.bottom}")
                     }
-                    .sortedBy { it.bounds?.top ?: Int.MAX_VALUE }
+                }
 
-                // Match by pickup address words first (prioritize name match over distance)
+                val resultCandidates = ocr.blocks.filter { block ->
+                    val top = block.bounds?.top ?: 0
+                    top in resultsMinY..resultsMaxY && block.text.length > 3 &&
+                    skipTexts.none { block.text.contains(it, ignoreCase = true) }
+                }.sortedBy { it.bounds?.top ?: Int.MAX_VALUE }
+
+                Log.i(TAG, "Pickup result candidates (Y=$resultsMinY..$resultsMaxY): ${resultCandidates.size}")
+
+                // Tap on the LEFT side to avoid "Saved places" button on the right
+                val leftTapX = ActionExecutor.getScreenSize(service).first * 0.25f
+
+                // Strategy 1: Match by pickup address words
                 for (word in pickupWords) {
                     val match = resultCandidates.find { it.text.contains(word, ignoreCase = true) }
                     if (match?.bounds != null) {
                         val b = match.bounds!!
-                        Log.i(TAG, "Tapping pickup result matching '$word': '${match.text}' at (540, ${b.centerY()})")
-                        ActionExecutor.tapAtCoordinates(service, ActionExecutor.screenCenterX(service), b.centerY().toFloat())
+                        Log.i(TAG, "Tapping pickup result matching '$word': '${match.text}' at (left, ${b.centerY()})")
+                        ActionExecutor.tapAtCoordinates(service, leftTapX, b.centerY().toFloat())
                         return@AutomationStep StepResult.Success
                     }
                 }
 
-                // Fallback: match by distance pattern
+                // Strategy 2: Match by distance pattern
                 val distanceBlock = resultCandidates.find { block ->
                     block.text.contains(Regex("\\d+\\.?\\d*\\s*mi\\b"))
                 }
                 if (distanceBlock?.bounds != null) {
                     val b = distanceBlock.bounds!!
-                    Log.i(TAG, "Tapping pickup distance line: '${distanceBlock.text}' at (540, ${b.centerY()})")
-                    ActionExecutor.tapAtCoordinates(service, ActionExecutor.screenCenterX(service), b.centerY().toFloat())
+                    Log.i(TAG, "Tapping pickup distance line: '${distanceBlock.text}' at (left, ${b.centerY()})")
+                    ActionExecutor.tapAtCoordinates(service, leftTapX, b.centerY().toFloat())
                     return@AutomationStep StepResult.Success
                 }
 
-                // Fallback: first result
+                // Strategy 3: Tap the first result in the list (topmost candidate)
                 val firstResult = resultCandidates.firstOrNull()
                 if (firstResult?.bounds != null) {
                     val b = firstResult.bounds!!
-                    Log.i(TAG, "Tapping first pickup result: '${firstResult.text}' at (540, ${b.centerY()})")
-                    ActionExecutor.tapAtCoordinates(service, ActionExecutor.screenCenterX(service), b.centerY().toFloat())
+                    Log.i(TAG, "Tapping first pickup result: '${firstResult.text}' at (left, ${b.centerY()})")
+                    ActionExecutor.tapAtCoordinates(service, leftTapX, b.centerY().toFloat())
                     return@AutomationStep StepResult.Success
                 }
             }
@@ -382,9 +619,9 @@ object UberScript {
         waitCondition = { root ->
             root.packageName?.toString() == PACKAGE
         },
-        timeoutMs = 15_000,
+        timeoutMs = 20_000,
         delayAfterMs = 2000,
-        maxRetries = 5,
+        maxRetries = 7,
         action = { root, stepContext ->
             val service = AutomataAccessibilityService.instance.value
                 ?: return@AutomationStep StepResult.Failure("No accessibility service")
@@ -399,15 +636,15 @@ object UberScript {
                     // 1. Uber auto-navigated after pickup selection with a cached destination (BAD)
                     // 2. Destination was already entered and Uber navigated here (GOOD)
                     //
-                    // If we already typed the destination in a prior retry, trust it.
-                    val alreadyTyped = stepContext.collectedData["uber_dest_typed"] == "true"
-                    if (alreadyTyped) {
-                        Log.i(TAG, "Already on ride options after typing destination — skipping")
+                    // If we already typed AND selected the destination in a prior retry, trust it.
+                    val alreadySelected = stepContext.collectedData["uber_dest_selected"] == "true"
+                    if (alreadySelected) {
+                        Log.i(TAG, "Already on ride options after selecting destination — skipping")
                         stepContext.collectedData["destination_verified"] = "true"
-                        return@AutomationStep StepResult.Skip("Destination was typed, now on ride options")
+                        return@AutomationStep StepResult.Skip("Destination was selected, now on ride options")
                     }
 
-                    // First time seeing ride options — check if destination words are on screen
+                    // Check if destination words are on screen
                     val destWords = destination.split(" ").filter { it.length > 2 }
                     val hasCorrectDest = destWords.any { word ->
                         checkOcr.fullText.contains(word, ignoreCase = true)
@@ -418,41 +655,33 @@ object UberScript {
                         return@AutomationStep StepResult.Skip("Already on ride options with correct destination")
                     }
 
-                    // Destination not found in text — likely a cached wrong destination.
-                    // Only try to fix it once (first retry), then give up and trust it
-                    // to avoid infinite retry loops on truncated destination names.
-                    val fixAttempted = stepContext.collectedData["uber_dest_fix_attempted"] == "true"
-                    if (fixAttempted) {
-                        Log.i(TAG, "Already attempted to fix destination, accepting current ride options")
-                        stepContext.collectedData["destination_verified"] = "true"
-                        return@AutomationStep StepResult.Skip("Accepting ride options after fix attempt")
-                    }
-
-                    // First attempt: try to navigate back to search to enter correct destination
-                    Log.i(TAG, "On ride options but destination may not match '$destination' — navigating back to search")
-                    stepContext.collectedData["uber_dest_fix_attempted"] = "true"
+                    // Wrong destination on ride options — tap the route/destination area
+                    // at the top to edit it. This preserves the pickup and only changes
+                    // the destination. Do NOT press Back — that resets both fields.
+                    Log.i(TAG, "On ride options with wrong destination — tapping route area to edit for '$destination'")
 
                     val routeBlocks = checkOcr.blocks.filter { block ->
                         val top = block.bounds?.top ?: 0
                         top in 50..350 && block.text.length > 3
                     }
+                    // Tap the LAST route block (usually the destination line, below pickup)
                     val routeBlock = routeBlocks.lastOrNull { it.bounds != null }
                     if (routeBlock?.bounds != null) {
                         val b = routeBlock.bounds!!
-                        Log.i(TAG, "Tapping route area to edit destination: '${routeBlock.text}' at (${b.centerX()}, ${b.centerY()})")
+                        Log.i(TAG, "Tapping destination in route area: '${routeBlock.text}' at (${b.centerX()}, ${b.centerY()})")
                         ActionExecutor.tapAtCoordinates(service, b.centerX().toFloat(), b.centerY().toFloat())
-                        kotlinx.coroutines.delay(2000)
                     } else {
-                        Log.i(TAG, "Tapping top area to edit route")
-                        ActionExecutor.tapAtCoordinates(service, ActionExecutor.screenCenterX(service), ActionExecutor.getScreenSize(service).second * 0.085f)
-                        kotlinx.coroutines.delay(2000)
+                        // Fallback: tap the route area where destination typically appears
+                        val screenHeight = ActionExecutor.getScreenSize(service).second
+                        Log.i(TAG, "Tapping route area fallback for destination edit")
+                        ActionExecutor.tapAtCoordinates(service, ActionExecutor.screenCenterX(service), screenHeight * 0.12f)
                     }
-
-                    return@AutomationStep StepResult.Retry("Navigated back to search to fix destination")
+                    kotlinx.coroutines.delay(2000)
+                    return@AutomationStep StepResult.Retry("Navigating to edit destination")
                 }
             }
 
-            // Find ALL editable fields — destination is the empty one
+            // Not on ride options — we're on the search screen. Find editable fields.
             var allEditFields = NodeFinder.findAllNodesRecursive(root) { it.isEditable }
             Log.i(TAG, "Found ${allEditFields.size} editable field(s)")
 
@@ -499,19 +728,37 @@ object UberScript {
             }
 
             if (destField != null) {
-                // Focus the field first
-                destField.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_FOCUS)
-                ActionExecutor.clearText(destField)
-                if (ActionExecutor.setText(destField, destination)) {
+                // Tap the field to activate it (ACTION_FOCUS alone may not work in Uber)
+                Log.i(TAG, "Tapping destination field to activate it")
+                ActionExecutor.tapNodeCenter(service, destField)
+                kotlinx.coroutines.delay(500)
+
+                // Re-fetch the field after tapping (node references can go stale)
+                val freshRoot = service.getRootNode() ?: root
+                val freshFields = NodeFinder.findAllNodesRecursive(freshRoot) { it.isEditable }
+                val activeField = freshFields.find { field ->
+                    val text = field.text?.toString() ?: ""
+                    text.isEmpty() || text.contains("Where to", ignoreCase = true) ||
+                    text.contains("Search", ignoreCase = true) ||
+                    text.contains("destination", ignoreCase = true)
+                } ?: freshFields.lastOrNull() ?: destField
+
+                ActionExecutor.click(activeField)
+                kotlinx.coroutines.delay(300)
+                activeField.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_FOCUS)
+                ActionExecutor.clearText(activeField)
+                if (ActionExecutor.setTextWithRetrigger(activeField, destination)) {
                     Log.i(TAG, "Destination text set: $destination")
                     stepContext.collectedData["uber_dest_typed"] = "true"
-                    // Wait for search results
+                    // Wait for search results to load
                     kotlinx.coroutines.delay(1500)
                     return@AutomationStep StepResult.Success
+                } else {
+                    Log.w(TAG, "setText failed — retrying")
                 }
             }
 
-            StepResult.Retry("No editable field found for destination")
+            StepResult.Retry("Could not enter destination text")
         }
     )
 
@@ -534,22 +781,84 @@ object UberScript {
                 val hasVehicle = checkOcr.fullText.contains("Moto", true) ||
                         checkOcr.fullText.contains("Tuk", true) || checkOcr.fullText.contains("Zip", true)
                 if (hasPrice && hasVehicle) {
-                    // Skip if destination was verified or typed by enterDestination
+                    // Only skip if destination was explicitly verified or already selected
                     val verified = stepContext.collectedData["destination_verified"] == "true"
-                    val typed = stepContext.collectedData["uber_dest_typed"] == "true"
-                    if (verified || typed) {
-                        Log.i(TAG, "Already on ride options (verified=$verified, typed=$typed) — skipping")
+                    val selected = stepContext.collectedData["uber_dest_selected"] == "true"
+                    if (verified || selected) {
+                        Log.i(TAG, "Already on ride options (verified=$verified, selected=$selected) — skipping")
                         return@AutomationStep StepResult.Skip("Already on ride options")
                     }
-                    // enterDestination hasn't run yet — this shouldn't happen normally
-                    Log.w(TAG, "On ride options but destination not verified/typed — retrying")
-                    return@AutomationStep StepResult.Retry("Destination not yet verified")
+                    // Typed but not yet selected — check if destination words match screen
+                    val destWords2 = destination.split(" ").filter { it.length > 2 }
+                    val hasCorrectDest = destWords2.any { word ->
+                        checkOcr.fullText.contains(word, ignoreCase = true)
+                    }
+                    if (hasCorrectDest) {
+                        Log.i(TAG, "On ride options with correct destination words — accepting")
+                        stepContext.collectedData["uber_dest_selected"] = "true"
+                        return@AutomationStep StepResult.Skip("Already on ride options with correct destination")
+                    }
+                    Log.w(TAG, "On ride options but wrong destination — retrying")
+                    return@AutomationStep StepResult.Retry("Wrong destination on ride options")
                 }
             }
 
             Log.i(TAG, "Looking for search results...")
 
             val destWords = destination.split(" ").filter { it.length > 2 }
+            val screenHeight = ActionExecutor.getScreenSize(service).second
+            val resultsMaxY = (screenHeight * 0.65).toInt()
+
+            // Find the bottom of the editable fields so we only tap search results BELOW them.
+            // This avoids tapping the text field itself when OCR picks up the typed text.
+            val editableFields = NodeFinder.findAllNodesRecursive(root) { it.isEditable }
+            val fieldsBottomY = editableFields.maxOfOrNull { field ->
+                val rect = android.graphics.Rect()
+                field.getBoundsInScreen(rect)
+                rect.bottom
+            } ?: (screenHeight * 0.30).toInt()
+            val resultsMinY = fieldsBottomY + 20 // small gap below fields
+            Log.i(TAG, "Search results Y range: $resultsMinY..$resultsMaxY (fields bottom: $fieldsBottomY)")
+
+            // Wait for search results to stabilize (stop changing) before reading.
+            // Uber loads results progressively, so early OCR may show stale/partial results.
+            val skipTexts = setOf("Pick-up now", "For me", "Search in a different",
+                "Plan your trip", "Get more results", "Where to", "Saved places",
+                "Set location on map")
+
+            var stableOcr: com.jayathu.automata.engine.OcrResult? = null
+            var previousFirstResult: String? = null
+            for (attempt in 1..4) {
+                val snapshot = ScreenReader.captureAndRead(service)
+                if (snapshot != null) {
+                    val candidates = snapshot.blocks
+                        .filter { block ->
+                            val top = block.bounds?.top ?: 0
+                            top in resultsMinY..resultsMaxY && block.text.length > 3 &&
+                            skipTexts.none { block.text.contains(it, ignoreCase = true) }
+                        }
+                        .sortedBy { it.bounds?.top ?: Int.MAX_VALUE }
+                    val firstText = candidates.firstOrNull()?.text
+                    val hasWordMatch = candidates.any { c ->
+                        destWords.any { word -> c.text.contains(word, ignoreCase = true) }
+                    }
+                    Log.i(TAG, "Search stabilization attempt $attempt: first='$firstText', hasWordMatch=$hasWordMatch")
+
+                    if (firstText != null && firstText == previousFirstResult) {
+                        stableOcr = snapshot
+                        break
+                    }
+                    // If we found a word match, results are relevant — use immediately
+                    if (hasWordMatch && attempt >= 2) {
+                        Log.i(TAG, "Found word match for destination — results ready")
+                        stableOcr = snapshot
+                        break
+                    }
+                    previousFirstResult = firstText
+                    stableOcr = snapshot
+                }
+                if (attempt < 4) kotlinx.coroutines.delay(1000)
+            }
 
             // Try accessibility — find clickable, NON-editable results matching destination
             // (editable nodes are the search input fields, not results)
@@ -571,14 +880,13 @@ object UberScript {
             if (matchingResult != null) {
                 Log.i(TAG, "Clicking matching result via accessibility: ${matchingResult.text}")
                 if (ActionExecutor.click(matchingResult)) {
+                    stepContext.collectedData["uber_dest_selected"] = "true"
                     return@AutomationStep StepResult.Success
                 }
             }
 
             // OCR approach — tap the search result by coordinates.
-            // The pickup field is at ~Y=548, destination field at ~Y=637.
-            // Search RESULTS start below ~Y=700.
-            val ocr = ScreenReader.captureAndRead(service)
+            val ocr = stableOcr
             if (ocr != null) {
                 Log.i(TAG, "Search results OCR: ${ocr.fullText.take(500)}")
 
@@ -589,47 +897,59 @@ object UberScript {
                     }
                 }
 
-                // Filter to result candidates in Y=700..1200 (below search fields, above keyboard)
-                val skipTexts = setOf("Pick-up now", "For me", "Search in a different",
-                    "Plan your trip", "Get more results", "Where to")
+                // Filter to result candidates below search fields, above keyboard
                 val resultCandidates = ocr.blocks
                     .filter { block ->
                         val top = block.bounds?.top ?: 0
-                        top in 700..1200 && block.text.length > 3 &&
+                        top in resultsMinY..resultsMaxY && block.text.length > 3 &&
                         skipTexts.none { block.text.contains(it, ignoreCase = true) }
                     }
                     .sortedBy { it.bounds?.top ?: Int.MAX_VALUE }
 
-                // Strategy 1: Find the distance line (e.g. "6.9 mi 72 Bauddhaloka Mawatha")
+                // Tap on the LEFT side of search results to avoid hitting the
+                // "Saved places" button on the right side of the row.
+                val leftTapX = ActionExecutor.getScreenSize(service).first * 0.25f
+
+                // Strategy 1: Match by destination words (most reliable)
+                for (word in destWords) {
+                    val match = resultCandidates.find { it.text.contains(word, ignoreCase = true) }
+                    if (match?.bounds != null) {
+                        val b = match.bounds!!
+                        Log.i(TAG, "Tapping result matching '$word': '${match.text}' at (left, ${b.centerY()})")
+                        ActionExecutor.tapAtCoordinates(service, leftTapX, b.centerY().toFloat())
+                        stepContext.collectedData["uber_dest_selected"] = "true"
+                        return@AutomationStep StepResult.Success
+                    }
+                }
+
+                // Strategy 2: Find the distance line (e.g. "6.9 mi 72 Bauddhaloka Mawatha")
                 val distanceBlock = resultCandidates.find { block ->
                     block.text.contains(Regex("\\d+\\.?\\d*\\s*mi\\b"))
                 }
                 if (distanceBlock?.bounds != null) {
                     val b = distanceBlock.bounds!!
-                    Log.i(TAG, "Tapping distance/address line via OCR: '${distanceBlock.text}' at (540, ${b.centerY()})")
-                    ActionExecutor.tapAtCoordinates(service, ActionExecutor.screenCenterX(service), b.centerY().toFloat())
+                    Log.i(TAG, "Tapping distance/address line via OCR: '${distanceBlock.text}' at (left, ${b.centerY()})")
+                    ActionExecutor.tapAtCoordinates(service, leftTapX, b.centerY().toFloat())
+                    stepContext.collectedData["uber_dest_selected"] = "true"
                     return@AutomationStep StepResult.Success
                 }
 
-                // Strategy 2: Match by destination words
-                for (word in destWords) {
-                    val match = resultCandidates.find { it.text.contains(word, ignoreCase = true) }
-                    if (match?.bounds != null) {
-                        val b = match.bounds!!
-                        Log.i(TAG, "Tapping result matching '$word': '${match.text}' at (540, ${b.centerY()})")
-                        ActionExecutor.tapAtCoordinates(service, ActionExecutor.screenCenterX(service), b.centerY().toFloat())
-                        return@AutomationStep StepResult.Success
-                    }
-                }
-
-                // Strategy 3: Tap the FIRST result in the list
-                // Handles short/generic destinations like "Home"
+                // Strategy 3: Only tap first result if it looks like an actual search result
+                // (contains a distance like "6.9 mi" or an address-like pattern).
+                // Never blindly tap — that's how we get wrong destinations.
                 val firstResult = resultCandidates.firstOrNull()
                 if (firstResult?.bounds != null) {
-                    val b = firstResult.bounds!!
-                    Log.i(TAG, "Tapping first result: '${firstResult.text}' at (540, ${b.centerY()})")
-                    ActionExecutor.tapAtCoordinates(service, ActionExecutor.screenCenterX(service), b.centerY().toFloat())
-                    return@AutomationStep StepResult.Success
+                    val looksLikeResult = firstResult.text.contains(Regex("\\d+\\.?\\d*\\s*mi\\b")) ||
+                            destWords.any { word -> firstResult.text.contains(word, ignoreCase = true) }
+                    if (looksLikeResult) {
+                        val b = firstResult.bounds!!
+                        Log.w(TAG, "Tapping first result as fallback: '${firstResult.text}'")
+                        ActionExecutor.tapAtCoordinates(service, leftTapX, b.centerY().toFloat())
+                        stepContext.collectedData["uber_dest_selected"] = "true"
+                        return@AutomationStep StepResult.Success
+                    } else {
+                        Log.w(TAG, "First result '${firstResult.text}' doesn't look like a search result — skipping blind tap")
+                    }
                 }
             }
 
@@ -702,13 +1022,16 @@ object UberScript {
                 val allPrices = mutableListOf<Pair<String, Rect?>>()
 
                 for (block in ocr.blocks) {
-                    // Fix common OCR misreads in price text before matching
-                    val cleanedText = block.text
-                        .replace("l", "1")  // lowercase L → 1
-                        .replace("O", "0")  // uppercase O → 0 (only in numeric context)
-                        .replace("I", "1")  // uppercase I → 1
-                    val match = pricePattern.find(cleanedText)
-                        ?: pricePattern.find(block.text) // Try original text too
+                    // Try original text first, then try with OCR misread corrections
+                    // only in the numeric portion (after the currency prefix)
+                    val match = pricePattern.find(block.text)
+                        ?: run {
+                            // Only fix OCR misreads in the digits after currency prefix
+                            val cleaned = block.text.replace(Regex("(?<=\\d)[lI](?=\\d)")) { m ->
+                                "1"
+                            }.replace(Regex("(?<=\\d)O(?=\\d)")) { "0" }
+                            pricePattern.find(cleaned)
+                        }
                     if (match != null) {
                         val rawPrice = match.groupValues[1].replace(",", "")
                         val price = normalizePrice(rawPrice)
@@ -929,19 +1252,28 @@ object UberScript {
                 val pickupField = fields1.firstOrNull()
                 if (pickupField != null) {
                     Log.i(TAG, "Entering pickup: $pickupAddress")
+                    ActionExecutor.click(pickupField)
+                    kotlinx.coroutines.delay(300)
                     pickupField.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_FOCUS)
                     ActionExecutor.clearText(pickupField)
-                    ActionExecutor.setText(pickupField, pickupAddress)
-                    kotlinx.coroutines.delay(2000)
+                    ActionExecutor.setTextWithRetrigger(pickupField, pickupAddress)
+                    kotlinx.coroutines.delay(1500)
 
                     // Select pickup result
                     val pickupOcr = ScreenReader.captureAndRead(service)
                     if (pickupOcr != null) {
                         val pickupWords = pickupAddress.split(" ").filter { it.length > 2 }
                         val skipTexts = setOf("Pick-up now", "For me", "Search in a different", "Plan your trip", "Where to")
+                        val screenSize = ActionExecutor.getScreenSize(service)
+                        val maxY = (screenSize.second * 0.65).toInt()
+                        val editFields1 = NodeFinder.findAllNodesRecursive(service.getRootNode() ?: root) { it.isEditable }
+                        val fieldsBot1 = editFields1.maxOfOrNull { f ->
+                            val r = android.graphics.Rect(); f.getBoundsInScreen(r); r.bottom
+                        } ?: (screenSize.second * 0.30).toInt()
+                        val minY = fieldsBot1 + 20
                         val candidates = pickupOcr.blocks.filter { block ->
                             val top = block.bounds?.top ?: 0
-                            top in 700..1200 && block.text.length > 3 &&
+                            top in minY..maxY && block.text.length > 3 &&
                             skipTexts.none { block.text.contains(it, true) }
                         }.sortedBy { it.bounds?.top ?: Int.MAX_VALUE }
 
@@ -993,10 +1325,12 @@ object UberScript {
 
             if (destField != null) {
                 Log.i(TAG, "Entering destination: $destination")
+                ActionExecutor.click(destField)
+                kotlinx.coroutines.delay(300)
                 destField.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_FOCUS)
                 ActionExecutor.clearText(destField)
-                ActionExecutor.setText(destField, destination)
-                kotlinx.coroutines.delay(2000)
+                ActionExecutor.setTextWithRetrigger(destField, destination)
+                kotlinx.coroutines.delay(1500)
             } else {
                 Log.w(TAG, "No editable field found for destination")
                 return@AutomationStep StepResult.Retry("No destination field found")
@@ -1007,9 +1341,16 @@ object UberScript {
             if (destOcr != null) {
                 val destWords = destination.split(" ").filter { it.length > 2 }
                 val skipTexts = setOf("Pick-up now", "For me", "Search in a different", "Plan your trip", "Where to")
+                val screenSize2 = ActionExecutor.getScreenSize(service)
+                val maxY2 = (screenSize2.second * 0.65).toInt()
+                val editFields2 = NodeFinder.findAllNodesRecursive(service.getRootNode() ?: root) { it.isEditable }
+                val fieldsBot2 = editFields2.maxOfOrNull { f ->
+                    val r = android.graphics.Rect(); f.getBoundsInScreen(r); r.bottom
+                } ?: (screenSize2.second * 0.30).toInt()
+                val minY2 = fieldsBot2 + 20
                 val candidates = destOcr.blocks.filter { block ->
                     val top = block.bounds?.top ?: 0
-                    top in 700..1200 && block.text.length > 3 &&
+                    top in minY2..maxY2 && block.text.length > 3 &&
                     skipTexts.none { block.text.contains(it, true) }
                 }.sortedBy { it.bounds?.top ?: Int.MAX_VALUE }
 
@@ -1030,7 +1371,7 @@ object UberScript {
             }
 
             // Step 5: Wait for ride options to load
-            kotlinx.coroutines.delay(4000)
+            kotlinx.coroutines.delay(2000)
             val finalOcr = ScreenReader.captureAndRead(service)
             if (finalOcr != null) {
                 val hasPrice = finalOcr.fullText.contains("LKR", true) || finalOcr.fullText.contains("Rs", true)
@@ -1062,28 +1403,9 @@ object UberScript {
             val service = AutomataAccessibilityService.instance.value
                 ?: return@AutomationStep StepResult.Failure("No accessibility service")
 
-            // Try accessibility first
-            val forMeNode = NodeFinder.findByText(root, "For me")
-                ?: NodeFinder.findByText(root, "For Me")
-            if (forMeNode != null) {
-                Log.i(TAG, "Found 'For me' prompt, tapping")
-                if (ActionExecutor.click(forMeNode)) {
-                    return@AutomationStep StepResult.Success
-                }
-            }
-
-            // OCR fallback
             val ocr = ScreenReader.captureAndRead(service)
             if (ocr != null) {
                 Log.i(TAG, "For-me check OCR: ${ocr.fullText.take(300)}")
-
-                val forMeBlocks = ScreenReader.findTextBlocks(ocr, "For me")
-                if (forMeBlocks.isNotEmpty() && forMeBlocks.first().bounds != null) {
-                    val b = forMeBlocks.first().bounds!!
-                    Log.i(TAG, "Tapping 'For me' via OCR at (${b.centerX()}, ${b.centerY()})")
-                    ActionExecutor.tapAtCoordinates(service, b.centerX().toFloat(), b.centerY().toFloat())
-                    return@AutomationStep StepResult.Success
-                }
 
                 // Check if we're already past this (confirm pickup or requesting)
                 if (ocr.fullText.contains("Confirm", ignoreCase = true) ||
@@ -1091,6 +1413,34 @@ object UberScript {
                     ocr.fullText.contains("Requesting", ignoreCase = true)) {
                     Log.i(TAG, "No 'For me' prompt, already on next screen")
                     return@AutomationStep StepResult.Skip("No 'For me' prompt")
+                }
+
+                // If we still see ride prices, the screen hasn't transitioned yet from
+                // ride options. The "For me" on ride options is a label, NOT the booking prompt.
+                // Don't tap it — retry until the screen changes.
+                val hasPrice = ocr.fullText.contains("LKR", true) || ocr.fullText.contains("Rs", true)
+                val hasChoose = ocr.fullText.contains("Choose", true)
+                if (hasPrice || hasChoose) {
+                    Log.i(TAG, "Still on ride options screen (hasPrice=$hasPrice, hasChoose=$hasChoose) — waiting for transition")
+                    return@AutomationStep StepResult.Retry("Still on ride options screen")
+                }
+
+                // Now look for the actual "For me" prompt (appears after ride options transition)
+                val forMeNode = NodeFinder.findByText(root, "For me")
+                    ?: NodeFinder.findByText(root, "For Me")
+                if (forMeNode != null) {
+                    Log.i(TAG, "Found 'For me' prompt, tapping")
+                    if (ActionExecutor.click(forMeNode)) {
+                        return@AutomationStep StepResult.Success
+                    }
+                }
+
+                val forMeBlocks = ScreenReader.findTextBlocks(ocr, "For me")
+                if (forMeBlocks.isNotEmpty() && forMeBlocks.first().bounds != null) {
+                    val b = forMeBlocks.first().bounds!!
+                    Log.i(TAG, "Tapping 'For me' via OCR at (${b.centerX()}, ${b.centerY()})")
+                    ActionExecutor.tapAtCoordinates(service, b.centerX().toFloat(), b.centerY().toFloat())
+                    return@AutomationStep StepResult.Success
                 }
             }
 
@@ -1150,6 +1500,71 @@ object UberScript {
             }
 
             StepResult.Retry("Could not find 'Confirm pickup' button")
+        }
+    )
+
+    /**
+     * Handle "Is this trip for someone else?" prompt that appears AFTER
+     * confirming the pickup location when you are far from the pickup.
+     * Tap "No, it's for me" if shown, otherwise skip.
+     */
+    private fun handleNotForSomeoneElsePrompt() = AutomationStep(
+        name = "Handle 'someone else' prompt (if any)",
+        waitCondition = { root ->
+            root.packageName?.toString() == PACKAGE
+        },
+        timeoutMs = 6_000,
+        delayAfterMs = 1000,
+        maxRetries = 1,
+        action = { root, _ ->
+            val service = AutomataAccessibilityService.instance.value
+                ?: return@AutomationStep StepResult.Failure("No accessibility service")
+
+            // Check if the ride is already being requested (no prompt appeared)
+            val alreadyRequesting = NodeFinder.findByText(root, "Looking for")
+                ?: NodeFinder.findByText(root, "Requesting")
+                ?: NodeFinder.findByText(root, "Finding your ride")
+            if (alreadyRequesting != null) {
+                Log.i(TAG, "Ride already being requested, no 'someone else' prompt")
+                return@AutomationStep StepResult.Skip("Already requesting")
+            }
+
+            // Try accessibility node first
+            val noForMeNode = NodeFinder.findByText(root, "No, it's for me")
+                ?: NodeFinder.findByText(root, "No, It's For Me")
+                ?: NodeFinder.findByText(root, "it's for me")
+            if (noForMeNode != null) {
+                Log.i(TAG, "Found 'No, it's for me' prompt, tapping")
+                if (ActionExecutor.click(noForMeNode)) {
+                    return@AutomationStep StepResult.Success
+                }
+            }
+
+            // OCR fallback
+            val ocr = ScreenReader.captureAndRead(service)
+            if (ocr != null) {
+                Log.i(TAG, "Someone-else prompt OCR: ${ocr.fullText.take(300)}")
+
+                // Already requesting — no prompt
+                if (ocr.fullText.contains("Looking for", ignoreCase = true) ||
+                    ocr.fullText.contains("Requesting", ignoreCase = true)) {
+                    Log.i(TAG, "Ride already being requested, skipping")
+                    return@AutomationStep StepResult.Skip("Already requesting")
+                }
+
+                // Look for "it's for me" text via OCR
+                val blocks = ScreenReader.findTextBlocks(ocr, "it's for me")
+                if (blocks.isNotEmpty() && blocks.first().bounds != null) {
+                    val b = blocks.first().bounds!!
+                    Log.i(TAG, "Tapping 'No, it's for me' via OCR at (${b.centerX()}, ${b.centerY()})")
+                    ActionExecutor.tapAtCoordinates(service, b.centerX().toFloat(), b.centerY().toFloat())
+                    return@AutomationStep StepResult.Success
+                }
+            }
+
+            // Prompt not shown — skip
+            Log.i(TAG, "No 'someone else' prompt detected, skipping")
+            StepResult.Skip("No 'someone else' prompt")
         }
     )
 }

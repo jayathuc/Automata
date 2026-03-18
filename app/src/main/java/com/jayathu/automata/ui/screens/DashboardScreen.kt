@@ -44,6 +44,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.jayathu.automata.data.model.TaskConfig
 import com.jayathu.automata.engine.AutomationResult
+import com.jayathu.automata.engine.ErrorMapper
 import com.jayathu.automata.ui.AutomationUiState
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -290,12 +291,18 @@ private fun ResultBanner(result: AutomationResult, onDismiss: () -> Unit) {
                 msg
             )
         }
-        is AutomationResult.Failed -> ResultInfo(
-            MaterialTheme.colorScheme.errorContainer,
-            MaterialTheme.colorScheme.onErrorContainer,
-            "Failed at: ${result.stepName}",
-            result.reason
-        )
+        is AutomationResult.Failed -> {
+            val friendly = ErrorMapper.map(result.stepName, result.reason)
+            ResultInfo(
+                MaterialTheme.colorScheme.errorContainer,
+                MaterialTheme.colorScheme.onErrorContainer,
+                friendly.title,
+                if (friendly.suggestion.isNotBlank())
+                    "${friendly.message}\n${friendly.suggestion}"
+                else
+                    friendly.message
+            )
+        }
         is AutomationResult.Aborted -> ResultInfo(
             MaterialTheme.colorScheme.surfaceVariant,
             MaterialTheme.colorScheme.onSurfaceVariant,

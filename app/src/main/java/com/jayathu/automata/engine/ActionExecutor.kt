@@ -102,6 +102,44 @@ object ActionExecutor {
         return result
     }
 
+    /**
+     * Simulates typing by progressively setting text one character at a time.
+     * Each ACTION_SET_TEXT call adds one more character, which triggers the
+     * app's TextWatcher/autocomplete listener on each change.
+     * Only types the last few characters individually — pastes the bulk first for speed.
+     */
+    suspend fun setTextWithRetrigger(node: AccessibilityNodeInfo?, text: String, typeLastChars: Int = 5, perCharDelayMs: Long = 50): Boolean {
+        if (node == null) return false
+        node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+
+        // For short text, type entirely character by character
+        val startTypingAt = if (text.length <= typeLastChars) 0 else text.length - typeLastChars
+
+        // Paste the bulk prefix instantly (if any)
+        if (startTypingAt > 0) {
+            val bulk = text.substring(0, startTypingAt)
+            val args = Bundle().apply {
+                putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, bulk)
+            }
+            node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+            delay(100)
+        }
+
+        // Type remaining characters one by one
+        var result = true
+        for (i in startTypingAt until text.length) {
+            val partial = text.substring(0, i + 1)
+            val args = Bundle().apply {
+                putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, partial)
+            }
+            result = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+            delay(perCharDelayMs)
+        }
+        // Final wait for search results to populate
+        delay(400)
+        return result
+    }
+
     // ===== Screen metrics =====
 
     /**

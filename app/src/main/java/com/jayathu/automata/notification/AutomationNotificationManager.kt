@@ -10,6 +10,7 @@ import androidx.core.app.NotificationCompat
 import com.jayathu.automata.MainActivity
 import com.jayathu.automata.R
 import com.jayathu.automata.engine.AutomationState
+import com.jayathu.automata.engine.ErrorMapper
 
 class AutomationNotificationManager(private val context: Context) {
 
@@ -71,10 +72,12 @@ class AutomationNotificationManager(private val context: Context) {
             )
             is AutomationState.Error -> {
                 dismiss() // Remove progress notification
-                showHighPriority(
-                    "Failed: ${state.stepName}",
-                    state.reason
-                )
+                val friendly = ErrorMapper.map(state.stepName, state.reason)
+                val body = if (friendly.suggestion.isNotBlank())
+                    "${friendly.message}\n${friendly.suggestion}"
+                else
+                    friendly.message
+                showHighPriority(friendly.title, body)
             }
             is AutomationState.Done -> {
                 dismiss() // Remove progress notification
@@ -104,7 +107,7 @@ class AutomationNotificationManager(private val context: Context) {
         )
 
         val builder = NotificationCompat.Builder(context, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setSmallIcon(R.drawable.ic_stat_notification)
             .setContentTitle(title)
             .setContentText(text)
             .setContentIntent(pendingIntent)
@@ -134,7 +137,7 @@ class AutomationNotificationManager(private val context: Context) {
         )
 
         val builder = NotificationCompat.Builder(context, RESULT_CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_dialog_alert)
+            .setSmallIcon(R.drawable.ic_stat_notification)
             .setContentTitle(title)
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
@@ -195,7 +198,7 @@ class AutomationNotificationManager(private val context: Context) {
         val defaultSound = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
 
         val builder = NotificationCompat.Builder(context, RESULT_CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setSmallIcon(R.drawable.ic_stat_notification)
             .setContentTitle(title)
             .setContentText(lines.firstOrNull() ?: "Done")
             .setStyle(NotificationCompat.BigTextStyle().bigText(summary))

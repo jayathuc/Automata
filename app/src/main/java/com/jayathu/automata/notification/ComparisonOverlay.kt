@@ -12,7 +12,6 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
-import android.widget.FrameLayout
 import android.view.animation.AlphaAnimation
 import android.view.animation.AnimationSet
 import android.view.animation.DecelerateInterpolator
@@ -76,7 +75,9 @@ class ComparisonOverlay(private val service: AccessibilityService) {
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                     WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                    WindowManager.LayoutParams.FLAG_SECURE,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
@@ -142,40 +143,19 @@ class ComparisonOverlay(private val service: AccessibilityService) {
             elevation = dpToPx(12).toFloat()
         }
 
-        // Header row: title + close (X) button
+        // Header title
         val titleText = winnerSummary ?: winner ?: "Comparison"
-        val headerRow = FrameLayout(context).apply {
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-        }
-        headerRow.addView(TextView(context).apply {
+        card.addView(TextView(context).apply {
             text = "Booking $titleText"
             setTextColor(Color.WHITE)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
             setTypeface(null, Typeface.BOLD)
             gravity = Gravity.CENTER
-            layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT
-            ).apply { setMargins(dpToPx(36), 0, dpToPx(36), 0) }
-        })
-        // Close X button
-        headerRow.addView(TextView(context).apply {
-            text = "✕"
-            setTextColor(Color.parseColor("#AAAACC"))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f)
-            setTypeface(null, Typeface.BOLD)
-            setPadding(dpToPx(8), dpToPx(0), dpToPx(0), dpToPx(4))
-            layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.END or Gravity.TOP
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
             )
-            setOnClickListener { dismiss() }
         })
-        card.addView(headerRow)
 
         // Divider
         card.addView(View(context).apply {

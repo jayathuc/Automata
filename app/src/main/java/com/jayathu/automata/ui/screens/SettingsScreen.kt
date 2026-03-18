@@ -20,11 +20,13 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -44,6 +46,8 @@ import com.jayathu.automata.data.model.SavedLocation
 @Composable
 fun SettingsScreen(
     savedLocations: List<SavedLocation>,
+    autoEnableLocation: Boolean,
+    onAutoEnableLocationChange: (Boolean) -> Unit,
     onAddLocation: (SavedLocation) -> Unit,
     onDeleteLocation: (SavedLocation) -> Unit,
     onBack: () -> Unit
@@ -77,6 +81,32 @@ fun SettingsScreen(
                 .padding(padding)
                 .padding(16.dp)
         ) {
+            Text("Automation", style = MaterialTheme.typography.titleLarge)
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Auto-enable location", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        "Automatically turn on location when starting a task",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = autoEnableLocation,
+                    onCheckedChange = onAutoEnableLocationChange
+                )
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+            HorizontalDivider()
+            Spacer(modifier = Modifier.height(16.dp))
+
             Text("Saved Locations", style = MaterialTheme.typography.titleLarge)
             Spacer(modifier = Modifier.height(8.dp))
 
