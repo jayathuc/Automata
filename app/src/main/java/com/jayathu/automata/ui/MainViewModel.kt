@@ -9,6 +9,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.jayathu.automata.data.db.AutomataDatabase
 import com.jayathu.automata.data.PreferencesManager
+import com.jayathu.automata.data.model.DecisionMode
 import com.jayathu.automata.data.model.SavedLocation
 import com.jayathu.automata.data.model.TaskConfig
 import com.jayathu.automata.data.repository.AutomataRepository
@@ -50,9 +51,65 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _autoEnableLocation = MutableStateFlow(true)
     val autoEnableLocation: StateFlow<Boolean> = _autoEnableLocation.asStateFlow()
 
+    private val _debugMode = MutableStateFlow(false)
+    val debugMode: StateFlow<Boolean> = _debugMode.asStateFlow()
+
+    private val _autoBypassSomeoneElse = MutableStateFlow(true)
+    val autoBypassSomeoneElse: StateFlow<Boolean> = _autoBypassSomeoneElse.asStateFlow()
+
+    private val _overlayDurationSeconds = MutableStateFlow(8)
+    val overlayDurationSeconds: StateFlow<Int> = _overlayDurationSeconds.asStateFlow()
+
+    private val _showComparisonOverlay = MutableStateFlow(true)
+    val showComparisonOverlay: StateFlow<Boolean> = _showComparisonOverlay.asStateFlow()
+
+    private val _autoCloseApps = MutableStateFlow(false)
+    val autoCloseApps: StateFlow<Boolean> = _autoCloseApps.asStateFlow()
+
+    private val _defaultDecisionMode = MutableStateFlow(DecisionMode.CHEAPEST)
+    val defaultDecisionMode: StateFlow<DecisionMode> = _defaultDecisionMode.asStateFlow()
+
+    private val _notificationSound = MutableStateFlow(true)
+    val notificationSound: StateFlow<Boolean> = _notificationSound.asStateFlow()
+
     fun setAutoEnableLocation(enabled: Boolean) {
         preferencesManager.autoEnableLocation = enabled
         _autoEnableLocation.value = enabled
+    }
+
+    fun setDebugMode(enabled: Boolean) {
+        preferencesManager.debugMode = enabled
+        _debugMode.value = enabled
+    }
+
+    fun setAutoBypassSomeoneElse(enabled: Boolean) {
+        preferencesManager.autoBypassSomeoneElse = enabled
+        _autoBypassSomeoneElse.value = enabled
+    }
+
+    fun setOverlayDurationSeconds(seconds: Int) {
+        preferencesManager.overlayDurationSeconds = seconds
+        _overlayDurationSeconds.value = seconds
+    }
+
+    fun setShowComparisonOverlay(enabled: Boolean) {
+        preferencesManager.showComparisonOverlay = enabled
+        _showComparisonOverlay.value = enabled
+    }
+
+    fun setAutoCloseApps(enabled: Boolean) {
+        preferencesManager.autoCloseApps = enabled
+        _autoCloseApps.value = enabled
+    }
+
+    fun setDefaultDecisionMode(mode: DecisionMode) {
+        preferencesManager.defaultDecisionMode = mode
+        _defaultDecisionMode.value = mode
+    }
+
+    fun setNotificationSound(enabled: Boolean) {
+        preferencesManager.notificationSound = enabled
+        _notificationSound.value = enabled
     }
 
     val taskConfigs: StateFlow<List<TaskConfig>> = repository.getAllTaskConfigs()
@@ -69,6 +126,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         _autoEnableLocation.value = preferencesManager.autoEnableLocation
+        _debugMode.value = preferencesManager.debugMode
+        _autoBypassSomeoneElse.value = preferencesManager.autoBypassSomeoneElse
+        _overlayDurationSeconds.value = preferencesManager.overlayDurationSeconds
+        _showComparisonOverlay.value = preferencesManager.showComparisonOverlay
+        _autoCloseApps.value = preferencesManager.autoCloseApps
+        _defaultDecisionMode.value = preferencesManager.defaultDecisionMode
+        _notificationSound.value = preferencesManager.notificationSound
 
         // Observe accessibility service state changes for notification updates
         viewModelScope.launch {
@@ -164,11 +228,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             currentStep = "Starting..."
         )
 
-        val overlay = service.let { ComparisonOverlay(it) }
-        val orchestrator = RideOrchestrator(context) { comparisonData ->
-            overlay.show(comparisonData)
-            notificationManager.showComparisonPopup(comparisonData)
-        }
+        val showOverlay = _showComparisonOverlay.value
+        val overlayDuration = _overlayDurationSeconds.value
+        val soundEnabled = _notificationSound.value
+        val autoClose = _autoCloseApps.value
+        val bypassSomeoneElse = _autoBypassSomeoneElse.value
+
+        val overlay = if (showOverlay) ComparisonOverlay(service, overlayDuration * 1000L) else null
+        val orchestrator = RideOrchestrator(
+            context = context,
+            autoBypassSomeoneElse = bypassSomeoneElse,
+            autoCloseApps = autoClose,
+            onComparisonReady = { comparisonData ->
+                overlay?.show(comparisonData)
+                notificationManager.showComparisonPopup(comparisonData, soundEnabled)
+            }
+        )
         val steps = orchestrator.buildSteps(config)
 
         engine.runAutomation(steps) { result ->

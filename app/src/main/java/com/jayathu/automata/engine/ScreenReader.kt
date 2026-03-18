@@ -150,8 +150,8 @@ object ScreenReader {
         for (block in ocrResult.blocks) {
             val match = pricePattern.find(block.text)
             if (match != null) {
-                val price = match.groupValues[1].replace(",", "")
-                Log.i(TAG, "Price found: $price from text '${block.text}'")
+                val price = sanitizePrice(match.groupValues[1])
+                Log.i(TAG, "Price found: $price from raw '${match.groupValues[1]}' in text '${block.text}'")
                 return price
             }
         }
@@ -159,13 +159,53 @@ object ScreenReader {
         // Also try the full text in case line splitting broke the pattern
         val fullMatch = pricePattern.find(ocrResult.fullText)
         if (fullMatch != null) {
-            val price = fullMatch.groupValues[1].replace(",", "")
-            Log.i(TAG, "Price found in full text: $price")
+            val price = sanitizePrice(fullMatch.groupValues[1])
+            Log.i(TAG, "Price found in full text: $price from raw '${fullMatch.groupValues[1]}'")
             return price
         }
 
         Log.w(TAG, "No price found in OCR text: ${ocrResult.fullText.take(300)}")
         return null
+    }
+
+    /**
+     * Sanitize an OCR-read price string.
+     *
+     * OCR commonly misreads commas as periods, producing strings like "7.733.67"
+     * instead of "7,733.67". This function detects and fixes such errors:
+     *
+     * - Multiple dots: treat all but the last as thousands separators (remove them)
+     *   e.g. "7.733.67" → "7733.67", "1.200.50" → "1200.50"
+     * - Mixed commas and dots: remove commas (thousands separators), keep last dot
+     *   e.g. "7,733.67" → "7733.67"
+     * - Only commas: remove them (e.g. "7,733" → "7733")
+     * - Single dot: leave as-is (e.g. "733.67" → "733.67")
+     *
+     * Sri Lankan ride prices are typically 100–99,999 LKR.
+     */
+    fun sanitizePrice(raw: String): String {
+        // Strip any spaces
+        var s = raw.trim()
+
+        // Remove commas — they're always thousands separators in LKR
+        s = s.replace(",", "")
+
+        // Count remaining dots
+        val dotCount = s.count { it == '.' }
+
+        if (dotCount <= 1) {
+            // Normal case: "7733.67" or "7733"
+            return s
+        }
+
+        // Multiple dots: OCR likely misread commas as dots.
+        // Keep only the LAST dot as the decimal separator, remove the rest.
+        val lastDotIndex = s.lastIndexOf('.')
+        val beforeLastDot = s.substring(0, lastDotIndex).replace(".", "")
+        val afterLastDot = s.substring(lastDotIndex) // includes the dot
+        val fixed = beforeLastDot + afterLastDot
+        Log.i(TAG, "sanitizePrice: '$raw' → '$fixed' (fixed ${dotCount - 1} misread comma(s))")
+        return fixed
     }
 
     /**

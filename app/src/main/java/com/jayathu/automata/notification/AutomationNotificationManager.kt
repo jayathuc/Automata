@@ -17,6 +17,7 @@ class AutomationNotificationManager(private val context: Context) {
     companion object {
         private const val CHANNEL_ID = "automata_status"
         private const val RESULT_CHANNEL_ID = "automata_result"
+        private const val RESULT_SILENT_CHANNEL_ID = "automata_result_silent"
         private const val NOTIFICATION_ID = 1001
         private const val RESULT_NOTIFICATION_ID = 1002
     }
@@ -44,10 +45,22 @@ class AutomationNotificationManager(private val context: Context) {
             "Automation Results",
             NotificationManager.IMPORTANCE_HIGH
         ).apply {
-            description = "Shows price comparison results"
+            description = "Shows price comparison results with sound"
             setShowBadge(true)
         }
         notificationManager.createNotificationChannel(resultChannel)
+
+        val resultSilentChannel = NotificationChannel(
+            RESULT_SILENT_CHANNEL_ID,
+            "Automation Results (Silent)",
+            NotificationManager.IMPORTANCE_HIGH
+        ).apply {
+            description = "Shows price comparison results without sound"
+            setShowBadge(true)
+            setSound(null, null)
+            enableVibration(false)
+        }
+        notificationManager.createNotificationChannel(resultSilentChannel)
     }
 
     fun updateFromState(state: AutomationState) {
@@ -153,7 +166,7 @@ class AutomationNotificationManager(private val context: Context) {
      * Called right after prices are compared (before booking) so the user
      * can see the winner without opening the app.
      */
-    fun showComparisonPopup(data: Map<String, String>) {
+    fun showComparisonPopup(data: Map<String, String>, soundEnabled: Boolean = true) {
         val pickMePrice = data["pickme_price"]
         val uberPrice = data["uber_price"]
         val winner = data["winner"]
@@ -195,9 +208,9 @@ class AutomationNotificationManager(private val context: Context) {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val defaultSound = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+        val channelId = if (soundEnabled) RESULT_CHANNEL_ID else RESULT_SILENT_CHANNEL_ID
 
-        val builder = NotificationCompat.Builder(context, RESULT_CHANNEL_ID)
+        val builder = NotificationCompat.Builder(context, channelId)
             .setSmallIcon(R.drawable.ic_stat_notification)
             .setContentTitle(title)
             .setContentText(lines.firstOrNull() ?: "Done")
@@ -205,10 +218,7 @@ class AutomationNotificationManager(private val context: Context) {
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setDefaults(NotificationCompat.DEFAULT_VIBRATE)
-            .setSound(defaultSound)
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
-            // fullScreenIntent makes it pop up like a call/WhatsApp even on lock screen
             .setFullScreenIntent(pendingIntent, true)
 
         notificationManager.notify(RESULT_NOTIFICATION_ID, builder.build())

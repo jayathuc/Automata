@@ -53,6 +53,7 @@ fun DashboardScreen(
     taskConfigs: List<TaskConfig>,
     automationState: AutomationUiState,
     dumpCountdown: Int,
+    debugMode: Boolean = false,
     onAddTask: () -> Unit,
     onEditTask: (Long) -> Unit,
     onGoTask: (TaskConfig) -> Unit,
@@ -71,8 +72,10 @@ fun DashboardScreen(
                     titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer
                 ),
                 actions = {
-                    IconButton(onClick = onDumpUi) {
-                        Icon(Icons.Default.Visibility, contentDescription = "Dump UI Tree")
+                    if (debugMode) {
+                        IconButton(onClick = onDumpUi) {
+                            Icon(Icons.Default.Visibility, contentDescription = "Dump UI Tree")
+                        }
                     }
                     IconButton(onClick = onSettingsClick) {
                         Icon(Icons.Default.Settings, contentDescription = "Settings")

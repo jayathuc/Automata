@@ -68,36 +68,42 @@ object UberScript {
         return steps
     }
 
-    fun buildBookingSteps(context: Context, destination: String, rideType: String, pickupAddress: String = ""): List<AutomationStep> {
+    fun buildBookingSteps(context: Context, destination: String, rideType: String, pickupAddress: String = "", autoBypassSomeoneElse: Boolean = true): List<AutomationStep> {
         // Uber may or may not remember the ride options screen after returnToHome.
         // ensureOnRideOptionsScreen handles both cases: if already on ride options, it skips;
         // if on home screen, it navigates through the full search flow.
-        return listOf(
+        val steps = mutableListOf(
             launchApp(context),
             ensureOnRideOptionsScreen(destination, pickupAddress),
             selectRideType(mapRideType(rideType)),
             tapChooseRide(mapRideType(rideType)),
             handleForMePrompt(),
-            tapConfirmPickup(),
-            handleNotForSomeoneElsePrompt()
+            tapConfirmPickup()
         )
+        if (autoBypassSomeoneElse) {
+            steps.add(handleNotForSomeoneElsePrompt())
+        }
+        return steps
     }
 
     /**
      * Quick booking steps — brings Uber back to foreground (still on ride options screen)
      * and taps Choose ride. Used when the app was already navigated during price reading.
      */
-    fun buildQuickBookingSteps(context: Context, rideType: String, destination: String = ""): List<AutomationStep> {
+    fun buildQuickBookingSteps(context: Context, rideType: String, destination: String = "", autoBypassSomeoneElse: Boolean = true): List<AutomationStep> {
         // resumeApp preserves app state (ride options screen with correct destination),
         // so no need to verify destination — just select ride type and book.
-        return listOf(
+        val steps = mutableListOf(
             resumeApp(context),
             selectRideType(mapRideType(rideType)),
             tapChooseRide(mapRideType(rideType)),
             handleForMePrompt(),
-            tapConfirmPickup(),
-            handleNotForSomeoneElsePrompt()
+            tapConfirmPickup()
         )
+        if (autoBypassSomeoneElse) {
+            steps.add(handleNotForSomeoneElsePrompt())
+        }
+        return steps
     }
 
     /**
@@ -1033,7 +1039,7 @@ object UberScript {
                             pricePattern.find(cleaned)
                         }
                     if (match != null) {
-                        val rawPrice = match.groupValues[1].replace(",", "")
+                        val rawPrice = ScreenReader.sanitizePrice(match.groupValues[1])
                         val price = normalizePrice(rawPrice)
                         allPrices.add(price to block.bounds)
                         Log.i(TAG, "Found price: LKR $price at ${block.bounds} (raw: '${block.text}', extracted: '$rawPrice')")

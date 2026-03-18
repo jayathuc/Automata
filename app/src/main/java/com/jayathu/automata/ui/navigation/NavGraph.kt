@@ -33,10 +33,12 @@ fun AutomataNavGraph(
             val taskConfigs by viewModel.taskConfigs.collectAsState()
             val automationState by viewModel.automationState.collectAsState()
             val dumpCountdown by viewModel.dumpCountdown.collectAsState()
+            val debugMode by viewModel.debugMode.collectAsState()
             DashboardScreen(
                 taskConfigs = taskConfigs,
                 automationState = automationState,
                 dumpCountdown = dumpCountdown,
+                debugMode = debugMode,
                 onAddTask = { navController.navigate(Routes.NEW_TASK) },
                 onEditTask = { id -> navController.navigate(Routes.editTask(id)) },
                 onGoTask = { config -> viewModel.runAutomation(config) },
@@ -98,10 +100,31 @@ fun AutomataNavGraph(
         composable(Routes.SETTINGS) {
             val savedLocations by viewModel.savedLocations.collectAsState()
             val autoEnableLocation by viewModel.autoEnableLocation.collectAsState()
+            val debugMode by viewModel.debugMode.collectAsState()
+            val autoBypassSomeoneElse by viewModel.autoBypassSomeoneElse.collectAsState()
+            val overlayDurationSeconds by viewModel.overlayDurationSeconds.collectAsState()
+            val showComparisonOverlay by viewModel.showComparisonOverlay.collectAsState()
+            val autoCloseApps by viewModel.autoCloseApps.collectAsState()
+            val defaultDecisionMode by viewModel.defaultDecisionMode.collectAsState()
+            val notificationSound by viewModel.notificationSound.collectAsState()
             SettingsScreen(
                 savedLocations = savedLocations,
                 autoEnableLocation = autoEnableLocation,
+                debugMode = debugMode,
+                autoBypassSomeoneElse = autoBypassSomeoneElse,
+                overlayDurationSeconds = overlayDurationSeconds,
+                showComparisonOverlay = showComparisonOverlay,
+                autoCloseApps = autoCloseApps,
+                defaultDecisionMode = defaultDecisionMode,
+                notificationSound = notificationSound,
                 onAutoEnableLocationChange = { viewModel.setAutoEnableLocation(it) },
+                onDebugModeChange = { viewModel.setDebugMode(it) },
+                onAutoBypassSomeoneElseChange = { viewModel.setAutoBypassSomeoneElse(it) },
+                onOverlayDurationChange = { viewModel.setOverlayDurationSeconds(it) },
+                onShowComparisonOverlayChange = { viewModel.setShowComparisonOverlay(it) },
+                onAutoCloseAppsChange = { viewModel.setAutoCloseApps(it) },
+                onDefaultDecisionModeChange = { viewModel.setDefaultDecisionMode(it) },
+                onNotificationSoundChange = { viewModel.setNotificationSound(it) },
                 onAddLocation = { viewModel.addSavedLocation(it) },
                 onDeleteLocation = { viewModel.deleteSavedLocation(it) },
                 onBack = { navController.popBackStack() }

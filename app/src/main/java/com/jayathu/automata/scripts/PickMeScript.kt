@@ -889,7 +889,7 @@ object PickMeScript {
 
                 if (matches.size == 1) {
                     // Single price in block — use block bounds directly
-                    val rawPrice = matches[0].groupValues[1].replace(",", "")
+                    val rawPrice = ScreenReader.sanitizePrice(matches[0].groupValues[1])
                     val price = normalizePrice(rawPrice)
                     allPrices.add(price to block.bounds)
                     Log.i(TAG, "Found price: Rs $price at ${block.bounds} (raw: '${block.text}')")
@@ -899,7 +899,7 @@ object PickMeScript {
                     val b = block.bounds!!
                     val textLen = cleanedText.length
                     for (m in matches) {
-                        val rawPrice = m.groupValues[1].replace(",", "")
+                        val rawPrice = ScreenReader.sanitizePrice(m.groupValues[1])
                         val price = normalizePrice(rawPrice)
                         val charPos = m.range.first
                         val estimatedX = b.left + (charPos.toFloat() / textLen * b.width()).toInt()
@@ -913,7 +913,7 @@ object PickMeScript {
             if (allPrices.isEmpty()) {
                 val fullMatches = pricePattern.findAll(ocr.fullText).toList()
                 for (m in fullMatches) {
-                    val rawPrice = m.groupValues[1].replace(",", "")
+                    val rawPrice = ScreenReader.sanitizePrice(m.groupValues[1])
                     val price = normalizePrice(rawPrice)
                     allPrices.add(price to null)
                     Log.i(TAG, "Found price in full text: Rs $price")

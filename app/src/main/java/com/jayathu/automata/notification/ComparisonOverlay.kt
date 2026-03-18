@@ -24,11 +24,13 @@ import android.widget.TextView
  * Uses TYPE_ACCESSIBILITY_OVERLAY so no extra permissions are needed beyond
  * the accessibility service we already have.
  */
-class ComparisonOverlay(private val service: AccessibilityService) {
+class ComparisonOverlay(
+    private val service: AccessibilityService,
+    private val autoDismissMs: Long = 8000L
+) {
 
     companion object {
         private const val TAG = "ComparisonOverlay"
-        private const val AUTO_DISMISS_MS = 8000L
     }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -104,7 +106,7 @@ class ComparisonOverlay(private val service: AccessibilityService) {
             view.startAnimation(animSet)
 
             // Auto-dismiss after timeout
-            handler.postDelayed({ dismissWithAnimation() }, AUTO_DISMISS_MS)
+            handler.postDelayed({ dismissWithAnimation() }, autoDismissMs)
 
             Log.i(TAG, "Comparison overlay shown")
         } catch (e: Exception) {

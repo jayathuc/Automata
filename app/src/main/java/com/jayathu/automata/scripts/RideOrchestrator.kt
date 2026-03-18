@@ -24,6 +24,8 @@ data class OrchestratorResult(
 
 class RideOrchestrator(
     private val context: Context,
+    private val autoBypassSomeoneElse: Boolean = true,
+    private val autoCloseApps: Boolean = false,
     private val onComparisonReady: ((Map<String, String>) -> Unit)? = null
 ) {
 
@@ -82,8 +84,13 @@ class RideOrchestrator(
         if (config.enableUber) {
             steps.addAll(buildConditionalBookingSteps(
                 RideApp.UBER,
-                UberScript.buildQuickBookingSteps(context, config.rideType, config.destinationAddress)
+                UberScript.buildQuickBookingSteps(context, config.rideType, config.destinationAddress, autoBypassSomeoneElse)
             ))
+        }
+
+        // Phase 4: Auto-close apps after booking (if enabled)
+        if (autoCloseApps) {
+            steps.add(closeAppsAfterBooking(config))
         }
 
         return steps
@@ -188,6 +195,23 @@ class RideOrchestrator(
         }
     )
 
+    private fun closeAppsAfterBooking(config: TaskConfig) = AutomationStep(
+        name = "Close apps after booking",
+        waitCondition = { true },
+        timeoutMs = 5_000,
+        delayBeforeMs = 3000,
+        action = { _, _ ->
+            if (config.enablePickMe) {
+                AutomationEngine.forceCloseApp(context, RideApp.PICKME.packageName)
+            }
+            if (config.enableUber) {
+                AutomationEngine.forceCloseApp(context, RideApp.UBER.packageName)
+            }
+            Log.i(TAG, "Auto-closed apps after booking")
+            StepResult.Success
+        }
+    )
+
     private fun setWinner(app: RideApp) = AutomationStep(
         name = "Set winner: ${app.displayName}",
         waitCondition = { true },
@@ -210,8 +234,19 @@ class RideOrchestrator(
             val pickMeEtaRaw = stepContext.collectedData["pickme_eta"]
             val uberEtaRaw = stepContext.collectedData["uber_eta"]
 
-            val pickMePrice = pickMeRaw?.toDoubleOrNull()
-            val uberPrice = uberRaw?.toDoubleOrNull()
+            var pickMePrice = pickMeRaw?.toDoubleOrNull()
+            var uberPrice = uberRaw?.toDoubleOrNull()
+
+            // Sanity check: Sri Lankan ride prices are typically 100–99,999 LKR.
+            // A price below 50 is almost certainly an OCR misread (e.g., comma read as dot).
+            if (pickMePrice != null && pickMePrice < 50) {
+                Log.w(TAG, "PickMe price suspiciously low ($pickMePrice from '$pickMeRaw'), discarding")
+                pickMePrice = null
+            }
+            if (uberPrice != null && uberPrice < 50) {
+                Log.w(TAG, "Uber price suspiciously low ($uberPrice from '$uberRaw'), discarding")
+                uberPrice = null
+            }
             val pickMeEta = pickMeEtaRaw?.toIntOrNull()
             val uberEta = uberEtaRaw?.toIntOrNull()
 
