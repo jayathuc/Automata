@@ -72,6 +72,11 @@ dependencies {
     // Splash Screen
     implementation(libs.androidx.splashscreen)
 
+    // Map
+    implementation(libs.osmdroid)
+    implementation(libs.open.location.code)
+    implementation(libs.google.maps.compose)
+
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

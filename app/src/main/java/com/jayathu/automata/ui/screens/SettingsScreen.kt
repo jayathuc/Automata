@@ -15,6 +15,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -43,6 +44,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.jayathu.automata.data.model.DecisionMode
+import com.jayathu.automata.data.model.MapProvider
 import com.jayathu.automata.data.model.RideApp
 import com.jayathu.automata.data.model.SavedLocation
 
@@ -59,6 +61,8 @@ fun SettingsScreen(
     defaultDecisionMode: DecisionMode,
     notificationSound: Boolean,
     preferredApp: RideApp,
+    mapProvider: MapProvider,
+    googleMapsApiKey: String,
     onAutoEnableLocationChange: (Boolean) -> Unit,
     onDebugModeChange: (Boolean) -> Unit,
     onAutoBypassSomeoneElseChange: (Boolean) -> Unit,
@@ -68,6 +72,8 @@ fun SettingsScreen(
     onDefaultDecisionModeChange: (DecisionMode) -> Unit,
     onNotificationSoundChange: (Boolean) -> Unit,
     onPreferredAppChange: (RideApp) -> Unit,
+    onMapProviderChange: (MapProvider) -> Unit,
+    onGoogleMapsApiKeyChange: (String) -> Unit,
     onAddLocation: (SavedLocation) -> Unit,
     onDeleteLocation: (SavedLocation) -> Unit,
     onBack: () -> Unit
@@ -180,6 +186,27 @@ fun SettingsScreen(
                     checked = notificationSound,
                     onCheckedChange = onNotificationSoundChange
                 )
+            }
+
+            item { SettingsDivider() }
+
+            // --- Map section ---
+            item {
+                SectionHeader("Map")
+            }
+            item {
+                MapProviderSelector(
+                    currentProvider = mapProvider,
+                    onProviderChange = onMapProviderChange
+                )
+            }
+            if (mapProvider == MapProvider.GOOGLE_MAPS) {
+                item {
+                    GoogleMapsApiKeyInput(
+                        apiKey = googleMapsApiKey,
+                        onApiKeyChange = onGoogleMapsApiKeyChange
+                    )
+                }
             }
 
             item { SettingsDivider() }
@@ -444,6 +471,125 @@ private fun PreferredAppSelector(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun MapProviderSelector(
+    currentProvider: MapProvider,
+    onProviderChange: (MapProvider) -> Unit
+) {
+    Column(modifier = Modifier.padding(vertical = 12.dp)) {
+        Text("Map provider", style = MaterialTheme.typography.bodyLarge)
+        Text(
+            "Used for picking locations on the map",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onProviderChange(MapProvider.OPENSTREETMAP) }
+                .padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            RadioButton(
+                selected = currentProvider == MapProvider.OPENSTREETMAP,
+                onClick = { onProviderChange(MapProvider.OPENSTREETMAP) }
+            )
+            Column(modifier = Modifier.padding(start = 8.dp)) {
+                Text("OpenStreetMap", style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    "No API key required",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onProviderChange(MapProvider.GOOGLE_MAPS) }
+                .padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            RadioButton(
+                selected = currentProvider == MapProvider.GOOGLE_MAPS,
+                onClick = { onProviderChange(MapProvider.GOOGLE_MAPS) }
+            )
+            Column(modifier = Modifier.padding(start = 8.dp)) {
+                Text("Google Maps", style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    "Requires your own API key",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun GoogleMapsApiKeyInput(
+    apiKey: String,
+    onApiKeyChange: (String) -> Unit
+) {
+    var showHelpDialog by remember { mutableStateOf(false) }
+
+    Column(modifier = Modifier.padding(vertical = 8.dp)) {
+        OutlinedTextField(
+            value = apiKey,
+            onValueChange = onApiKeyChange,
+            label = { Text("Google Maps API Key") },
+            placeholder = { Text("Paste your API key here") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            trailingIcon = {
+                IconButton(onClick = { showHelpDialog = true }) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.HelpOutline,
+                        contentDescription = "How to get an API key"
+                    )
+                }
+            }
+        )
+    }
+
+    if (showHelpDialog) {
+        AlertDialog(
+            onDismissRequest = { showHelpDialog = false },
+            title = { Text("How to get a Google Maps API key") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("1. Go to console.cloud.google.com")
+                    Text("2. Create a new project or select an existing one")
+                    Text("3. Link a billing account (required even for free tier, you won't be charged)")
+                    Text("4. Go to APIs & Services > Library")
+                    Text("5. Search for \"Maps SDK for Android\" and enable it")
+                    Text(
+                        "Important: Enable \"Maps SDK for Android\" specifically, not \"Maps Static API\" or other Maps APIs. They are separate products.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                    Text("6. Go to APIs & Services > Credentials")
+                    Text("7. Click \"Create Credentials\" > \"API Key\"")
+                    Text("8. Copy the key and paste it here")
+                    Text("9. When asked to restrict the key, you can tap \"Maybe later\"")
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        "Free tier: ~28,000 map loads/month (\$200 credit). It may take a few minutes for a new key to start working.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showHelpDialog = false }) {
+                    Text("Got it")
+                }
+            }
+        )
     }
 }
 

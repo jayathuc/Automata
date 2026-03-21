@@ -11,6 +11,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import com.jayathu.automata.ui.MainViewModel
 import com.jayathu.automata.ui.screens.DashboardScreen
+import com.jayathu.automata.ui.screens.MapPickerScreen
 import com.jayathu.automata.ui.screens.SettingsScreen
 import com.jayathu.automata.ui.screens.TaskConfigScreen
 
@@ -19,8 +20,10 @@ object Routes {
     const val NEW_TASK = "task/new"
     const val EDIT_TASK = "task/edit/{taskId}"
     const val SETTINGS = "settings"
+    const val MAP_PICKER = "map_picker/{fieldKey}"
 
     fun editTask(taskId: Long) = "task/edit/$taskId"
+    fun mapPicker(fieldKey: String) = "map_picker/$fieldKey"
 }
 
 @Composable
@@ -53,9 +56,20 @@ fun AutomataNavGraph(
             )
         }
 
-        composable(Routes.NEW_TASK) {
+        composable(Routes.NEW_TASK) { backStackEntry ->
+            // Observe map picker results
+            val pickedPickup = backStackEntry.savedStateHandle.getStateFlow<String?>("picked_pickup", null)
+                .collectAsState()
+            val pickedDestination = backStackEntry.savedStateHandle.getStateFlow<String?>("picked_destination", null)
+                .collectAsState()
+
             TaskConfigScreen(
                 existingConfig = null,
+                pickedPickup = pickedPickup.value,
+                pickedDestination = pickedDestination.value,
+                onPickedPickupConsumed = { backStackEntry.savedStateHandle.remove<String>("picked_pickup") },
+                onPickedDestinationConsumed = { backStackEntry.savedStateHandle.remove<String>("picked_destination") },
+                onPickOnMap = { fieldKey -> navController.navigate(Routes.mapPicker(fieldKey)) },
                 onSave = { config ->
                     viewModel.saveTaskConfig(config)
                     navController.popBackStack()
@@ -78,10 +92,20 @@ fun AutomataNavGraph(
 
             val config by viewModel.editingConfig.collectAsState()
 
+            val pickedPickup = backStackEntry.savedStateHandle.getStateFlow<String?>("picked_pickup", null)
+                .collectAsState()
+            val pickedDestination = backStackEntry.savedStateHandle.getStateFlow<String?>("picked_destination", null)
+                .collectAsState()
+
             config?.let { existingConfig ->
                 if (existingConfig.id != taskId) return@let
                 TaskConfigScreen(
                     existingConfig = existingConfig,
+                    pickedPickup = pickedPickup.value,
+                    pickedDestination = pickedDestination.value,
+                    onPickedPickupConsumed = { backStackEntry.savedStateHandle.remove<String>("picked_pickup") },
+                    onPickedDestinationConsumed = { backStackEntry.savedStateHandle.remove<String>("picked_destination") },
+                    onPickOnMap = { fieldKey -> navController.navigate(Routes.mapPicker(fieldKey)) },
                     onSave = { updated ->
                         viewModel.saveTaskConfig(updated)
                         viewModel.clearEditingConfig()
@@ -100,6 +124,27 @@ fun AutomataNavGraph(
             }
         }
 
+        composable(
+            route = Routes.MAP_PICKER,
+            arguments = listOf(navArgument("fieldKey") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val fieldKey = backStackEntry.arguments?.getString("fieldKey") ?: "destination"
+            val mapProvider by viewModel.mapProvider.collectAsState()
+            val apiKey by viewModel.googleMapsApiKey.collectAsState()
+
+            MapPickerScreen(
+                mapProvider = mapProvider,
+                googleMapsApiKey = apiKey,
+                onLocationPicked = { plusCode ->
+                    navController.previousBackStackEntry
+                        ?.savedStateHandle
+                        ?.set("picked_$fieldKey", plusCode)
+                    navController.popBackStack()
+                },
+                onBack = { navController.popBackStack() }
+            )
+        }
+
         composable(Routes.SETTINGS) {
             val savedLocations by viewModel.savedLocations.collectAsState()
             val autoEnableLocation by viewModel.autoEnableLocation.collectAsState()
@@ -111,6 +156,8 @@ fun AutomataNavGraph(
             val defaultDecisionMode by viewModel.defaultDecisionMode.collectAsState()
             val notificationSound by viewModel.notificationSound.collectAsState()
             val preferredApp by viewModel.preferredApp.collectAsState()
+            val mapProvider by viewModel.mapProvider.collectAsState()
+            val googleMapsApiKey by viewModel.googleMapsApiKey.collectAsState()
             SettingsScreen(
                 savedLocations = savedLocations,
                 autoEnableLocation = autoEnableLocation,
@@ -122,6 +169,8 @@ fun AutomataNavGraph(
                 defaultDecisionMode = defaultDecisionMode,
                 notificationSound = notificationSound,
                 preferredApp = preferredApp,
+                mapProvider = mapProvider,
+                googleMapsApiKey = googleMapsApiKey,
                 onAutoEnableLocationChange = { viewModel.setAutoEnableLocation(it) },
                 onDebugModeChange = { viewModel.setDebugMode(it) },
                 onAutoBypassSomeoneElseChange = { viewModel.setAutoBypassSomeoneElse(it) },
@@ -131,6 +180,8 @@ fun AutomataNavGraph(
                 onDefaultDecisionModeChange = { viewModel.setDefaultDecisionMode(it) },
                 onNotificationSoundChange = { viewModel.setNotificationSound(it) },
                 onPreferredAppChange = { viewModel.setPreferredApp(it) },
+                onMapProviderChange = { viewModel.setMapProvider(it) },
+                onGoogleMapsApiKeyChange = { viewModel.setGoogleMapsApiKey(it) },
                 onAddLocation = { viewModel.addSavedLocation(it) },
                 onDeleteLocation = { viewModel.deleteSavedLocation(it) },
                 onBack = { navController.popBackStack() }

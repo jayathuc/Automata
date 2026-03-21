@@ -16,6 +16,9 @@ lifecycle = "2.9.0"
 ksp = "2.0.21-1.0.28"
 mlkitText = "16.0.1"
 splashscreen = "1.0.1"
+osmdroid = "6.1.18"
+openLocationCode = "1.0.4"
+googleMapsCompose = "6.4.1"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -51,6 +54,11 @@ mlkit-text-recognition = { group = "com.google.mlkit", name = "text-recognition"
 
 # Splash Screen
 androidx-splashscreen = { group = "androidx.core", name = "core-splashscreen", version.ref = "splashscreen" }
+
+# Map
+osmdroid = { group = "org.osmdroid", name = "osmdroid-android", version.ref = "osmdroid" }
+open-location-code = { group = "com.google.openlocationcode", name = "openlocationcode", version.ref = "openLocationCode" }
+google-maps-compose = { group = "com.google.maps.android", name = "maps-compose", version.ref = "googleMapsCompose" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

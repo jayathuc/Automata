@@ -13,6 +13,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Map
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -28,9 +29,11 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -42,17 +45,36 @@ import com.jayathu.automata.data.model.TaskConfig
 @Composable
 fun TaskConfigScreen(
     existingConfig: TaskConfig?,
+    pickedPickup: String? = null,
+    pickedDestination: String? = null,
+    onPickedPickupConsumed: () -> Unit = {},
+    onPickedDestinationConsumed: () -> Unit = {},
+    onPickOnMap: (fieldKey: String) -> Unit = {},
     onSave: (TaskConfig) -> Unit,
     onDelete: (() -> Unit)?,
     onBack: () -> Unit
 ) {
-    var name by remember { mutableStateOf(existingConfig?.name ?: "") }
-    var pickup by remember { mutableStateOf(existingConfig?.pickupAddress ?: "") }
-    var destination by remember { mutableStateOf(existingConfig?.destinationAddress ?: "") }
-    var rideType by remember { mutableStateOf(existingConfig?.rideType ?: "Bike") }
-    var enablePickMe by remember { mutableStateOf(existingConfig?.enablePickMe ?: true) }
-    var enableUber by remember { mutableStateOf(existingConfig?.enableUber ?: true) }
-    var decisionMode by remember { mutableStateOf(existingConfig?.decisionMode ?: DecisionMode.CHEAPEST) }
+    var name by rememberSaveable { mutableStateOf(existingConfig?.name ?: "") }
+    var pickup by rememberSaveable { mutableStateOf(existingConfig?.pickupAddress ?: "") }
+    var destination by rememberSaveable { mutableStateOf(existingConfig?.destinationAddress ?: "") }
+    var rideType by rememberSaveable { mutableStateOf(existingConfig?.rideType ?: "Bike") }
+    var enablePickMe by rememberSaveable { mutableStateOf(existingConfig?.enablePickMe ?: true) }
+    var enableUber by rememberSaveable { mutableStateOf(existingConfig?.enableUber ?: true) }
+    var decisionMode by rememberSaveable { mutableStateOf(existingConfig?.decisionMode ?: DecisionMode.CHEAPEST) }
+
+    // Consume map picker results
+    LaunchedEffect(pickedPickup) {
+        if (pickedPickup != null) {
+            pickup = pickedPickup
+            onPickedPickupConsumed()
+        }
+    }
+    LaunchedEffect(pickedDestination) {
+        if (pickedDestination != null) {
+            destination = pickedDestination
+            onPickedDestinationConsumed()
+        }
+    }
 
     val isEditing = existingConfig != null
     val isValid = name.isNotBlank() && destination.isNotBlank() && (enablePickMe || enableUber)
@@ -101,23 +123,39 @@ fun TaskConfigScreen(
                 singleLine = true
             )
 
-            OutlinedTextField(
-                value = pickup,
-                onValueChange = { pickup = it },
-                label = { Text("Pickup Address") },
-                placeholder = { Text("Leave empty for current location") },
+            Row(
                 modifier = Modifier.fillMaxWidth(),
-                singleLine = true
-            )
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedTextField(
+                    value = pickup,
+                    onValueChange = { pickup = it },
+                    label = { Text("Pickup Address") },
+                    placeholder = { Text("Leave empty for current location") },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true
+                )
+                IconButton(onClick = { onPickOnMap("pickup") }) {
+                    Icon(Icons.Default.Map, contentDescription = "Pick on map")
+                }
+            }
 
-            OutlinedTextField(
-                value = destination,
-                onValueChange = { destination = it },
-                label = { Text("Destination Address") },
-                placeholder = { Text("e.g., 123 Main Street") },
+            Row(
                 modifier = Modifier.fillMaxWidth(),
-                singleLine = true
-            )
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedTextField(
+                    value = destination,
+                    onValueChange = { destination = it },
+                    label = { Text("Destination Address") },
+                    placeholder = { Text("e.g., 123 Main Street") },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true
+                )
+                IconButton(onClick = { onPickOnMap("destination") }) {
+                    Icon(Icons.Default.Map, contentDescription = "Pick on map")
+                }
+            }
 
             // Ride type
             Text("Ride Type", style = MaterialTheme.typography.titleMedium)

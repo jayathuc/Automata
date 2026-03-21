@@ -3,6 +3,7 @@ package com.jayathu.automata.data
 import android.content.Context
 import android.content.SharedPreferences
 import com.jayathu.automata.data.model.DecisionMode
+import com.jayathu.automata.data.model.MapProvider
 import com.jayathu.automata.data.model.RideApp
 
 class PreferencesManager(context: Context) {
@@ -19,6 +20,8 @@ class PreferencesManager(context: Context) {
         private const val KEY_NOTIFICATION_SOUND = "notification_sound"
         private const val KEY_PREFERRED_APP = "preferred_app"
         private const val KEY_SHOW_RUN_WARNING = "show_run_warning"
+        private const val KEY_MAP_PROVIDER = "map_provider"
+        private const val KEY_GOOGLE_MAPS_API_KEY = "google_maps_api_key"
     }
 
     private val prefs: SharedPreferences =
@@ -63,6 +66,18 @@ class PreferencesManager(context: Context) {
     var showRunWarning: Boolean
         get() = prefs.getBoolean(KEY_SHOW_RUN_WARNING, true)
         set(value) = prefs.edit().putBoolean(KEY_SHOW_RUN_WARNING, value).apply()
+
+    var mapProvider: MapProvider
+        get() = try {
+            MapProvider.valueOf(prefs.getString(KEY_MAP_PROVIDER, MapProvider.OPENSTREETMAP.name)!!)
+        } catch (_: Exception) {
+            MapProvider.OPENSTREETMAP
+        }
+        set(value) = prefs.edit().putString(KEY_MAP_PROVIDER, value.name).apply()
+
+    var googleMapsApiKey: String
+        get() = prefs.getString(KEY_GOOGLE_MAPS_API_KEY, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_GOOGLE_MAPS_API_KEY, value).apply()
 
     var preferredApp: RideApp
         get() = try {

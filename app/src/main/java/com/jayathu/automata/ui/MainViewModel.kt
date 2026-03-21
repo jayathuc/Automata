@@ -10,6 +10,7 @@ import androidx.lifecycle.viewModelScope
 import com.jayathu.automata.data.db.AutomataDatabase
 import com.jayathu.automata.data.PreferencesManager
 import com.jayathu.automata.data.model.DecisionMode
+import com.jayathu.automata.data.model.MapProvider
 import com.jayathu.automata.data.model.RideApp
 import com.jayathu.automata.data.model.SavedLocation
 import com.jayathu.automata.data.model.TaskConfig
@@ -80,6 +81,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _showRunWarning = MutableStateFlow(true)
     val showRunWarning: StateFlow<Boolean> = _showRunWarning.asStateFlow()
 
+    private val _mapProvider = MutableStateFlow(MapProvider.OPENSTREETMAP)
+    val mapProvider: StateFlow<MapProvider> = _mapProvider.asStateFlow()
+
+    private val _googleMapsApiKey = MutableStateFlow("")
+    val googleMapsApiKey: StateFlow<String> = _googleMapsApiKey.asStateFlow()
+
     private var controlOverlay: AutomationControlOverlay? = null
 
     fun setAutoEnableLocation(enabled: Boolean) {
@@ -132,6 +139,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _showRunWarning.value = show
     }
 
+    fun setMapProvider(provider: MapProvider) {
+        preferencesManager.mapProvider = provider
+        _mapProvider.value = provider
+    }
+
+    fun setGoogleMapsApiKey(key: String) {
+        preferencesManager.googleMapsApiKey = key
+        _googleMapsApiKey.value = key
+    }
+
     val taskConfigs: StateFlow<List<TaskConfig>> = repository.getAllTaskConfigs()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
@@ -155,6 +172,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _notificationSound.value = preferencesManager.notificationSound
         _preferredApp.value = preferencesManager.preferredApp
         _showRunWarning.value = preferencesManager.showRunWarning
+        _mapProvider.value = preferencesManager.mapProvider
+        _googleMapsApiKey.value = preferencesManager.googleMapsApiKey
 
         // Observe accessibility service state changes for notification updates
         viewModelScope.launch {
