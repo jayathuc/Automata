@@ -201,13 +201,20 @@ class RideOrchestrator(
         name = "Force-close apps",
         waitCondition = { true },
         timeoutMs = 5_000,
-        delayAfterMs = 500,
+        delayAfterMs = 1500,
         action = { _, _ ->
             if (config.enablePickMe) {
                 AutomationEngine.forceCloseApp(context, RideApp.PICKME.packageName)
             }
             if (config.enableUber) {
                 AutomationEngine.forceCloseApp(context, RideApp.UBER.packageName)
+            }
+            // Press home to ensure the launcher is the active window.
+            // Without this, rootInActiveWindow may return null after killing processes,
+            // causing the next step to timeout waiting for a root node.
+            val service = AutomataAccessibilityService.instance.value
+            if (service != null) {
+                com.jayathu.automata.engine.ActionExecutor.pressHome(service)
             }
             Log.i(TAG, "Force-closed enabled apps, ready for fresh start")
             StepResult.Success

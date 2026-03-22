@@ -12,7 +12,8 @@ data class TaskConfig(
     val rideType: String = "Bike",
     val enablePickMe: Boolean = true,
     val enableUber: Boolean = true,
-    val decisionMode: DecisionMode = DecisionMode.CHEAPEST
+    val decisionMode: DecisionMode = DecisionMode.CHEAPEST,
+    val roundTrip: Boolean = false
 )
 
 enum class DecisionMode {

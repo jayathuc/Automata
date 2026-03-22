@@ -29,10 +29,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -47,35 +45,25 @@ fun TaskConfigScreen(
     existingConfig: TaskConfig?,
     pickedPickup: String? = null,
     pickedDestination: String? = null,
-    onPickedPickupConsumed: () -> Unit = {},
-    onPickedDestinationConsumed: () -> Unit = {},
     onPickOnMap: (fieldKey: String) -> Unit = {},
     onSave: (TaskConfig) -> Unit,
     onDelete: (() -> Unit)?,
     onBack: () -> Unit
 ) {
+    // Compute effective initial values — picked value wins over existing config.
+    // Using the effective value as a rememberSaveable input key forces reinitialization
+    // when a map-picked value arrives, instead of restoring stale saved state.
+    // Picked values are NOT consumed; they're cleaned up when the back stack entry pops.
+    val effectivePickup = pickedPickup ?: existingConfig?.pickupAddress ?: ""
+    val effectiveDestination = pickedDestination ?: existingConfig?.destinationAddress ?: ""
+
     var name by rememberSaveable { mutableStateOf(existingConfig?.name ?: "") }
-    var pickup by rememberSaveable { mutableStateOf(existingConfig?.pickupAddress ?: "") }
-    var destination by rememberSaveable { mutableStateOf(existingConfig?.destinationAddress ?: "") }
+    var pickup by rememberSaveable(effectivePickup) { mutableStateOf(effectivePickup) }
+    var destination by rememberSaveable(effectiveDestination) { mutableStateOf(effectiveDestination) }
     var rideType by rememberSaveable { mutableStateOf(existingConfig?.rideType ?: "Bike") }
     var enablePickMe by rememberSaveable { mutableStateOf(existingConfig?.enablePickMe ?: true) }
     var enableUber by rememberSaveable { mutableStateOf(existingConfig?.enableUber ?: true) }
     var decisionMode by rememberSaveable { mutableStateOf(existingConfig?.decisionMode ?: DecisionMode.CHEAPEST) }
-
-    // Consume map picker results
-    LaunchedEffect(pickedPickup) {
-        if (pickedPickup != null) {
-            pickup = pickedPickup
-            onPickedPickupConsumed()
-        }
-    }
-    LaunchedEffect(pickedDestination) {
-        if (pickedDestination != null) {
-            destination = pickedDestination
-            onPickedDestinationConsumed()
-        }
-    }
-
     val isEditing = existingConfig != null
     val isValid = name.isNotBlank() && destination.isNotBlank() && (enablePickMe || enableUber)
 

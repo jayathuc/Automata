@@ -33,10 +33,50 @@ object UberScript {
     // Text labels
     private const val WHERE_TO_TEXT = "Where to?"
 
-    // Uber ride type names
+    // Plus Codes contain a '+' and match this pattern (e.g. "6JRXVVW4+8GQ")
+    private val PLUS_CODE_REGEX = Regex("^[2-9A-Z]{4,8}\\+[2-9A-Z]{2,4}$", RegexOption.IGNORE_CASE)
+    private fun isPlusCode(text: String) = PLUS_CODE_REGEX.matches(text.trim())
+
+    // Uber ride type names (standard + intercity variants)
     private const val TUK_TEXT = "Tuk"
     private const val MOTO_TEXT = "Moto"
     private const val ZIP_TEXT = "Zip"
+
+    // All known Uber ride type labels for detection
+    private val ALL_RIDE_TYPES = listOf(
+        "Moto", "Tuk", "Zip",
+        "Tuk Intercity", "Zip Intercity", "Van Intercity",
+        "UberX", "UberXL", "Comfort"
+    )
+
+    /**
+     * Shared helper to tap the "Continue" button via OCR or accessibility.
+     * Used by intercity prompt handlers.
+     */
+    private suspend fun tapContinueButton(
+        service: AutomataAccessibilityService,
+        root: android.view.accessibility.AccessibilityNodeInfo
+    ): StepResult {
+        val ocr = ScreenReader.captureAndRead(service)
+        if (ocr != null) {
+            val blocks = ScreenReader.findTextBlocks(ocr, "Continue")
+            if (blocks.isNotEmpty() && blocks.first().bounds != null) {
+                val b = blocks.first().bounds!!
+                Log.i(TAG, "Tapping 'Continue' via OCR at (${b.centerX()}, ${b.centerY()})")
+                ActionExecutor.tapAtCoordinates(service, b.centerX().toFloat(), b.centerY().toFloat())
+                return StepResult.Success
+            }
+        }
+        // Accessibility fallback
+        val node = NodeFinder.findByText(root, "Continue", exact = true)
+            ?: NodeFinder.findByText(root, "Continue")
+        if (node != null) {
+            Log.i(TAG, "Tapping 'Continue' via accessibility")
+            ActionExecutor.click(node)
+            return StepResult.Success
+        }
+        return StepResult.Retry("Could not find 'Continue' button")
+    }
 
     fun buildSteps(context: Context, destination: String, rideType: String, pickupAddress: String = ""): List<AutomationStep> {
         val steps = mutableListOf(
@@ -78,6 +118,9 @@ object UberScript {
             ensureOnRideOptionsScreen(destination, pickupAddress),
             selectRideType(mapRideType(rideType)),
             tapChooseRide(mapRideType(rideType)),
+            handleIntercityTripPrompt(),
+            handleDepartureTimePrompt(),
+            tapBookIntercityTrip(),
             handleForMePrompt(),
             tapConfirmPickup()
         )
@@ -98,6 +141,9 @@ object UberScript {
             resumeApp(context),
             selectRideType(mapRideType(rideType)),
             tapChooseRide(mapRideType(rideType)),
+            handleIntercityTripPrompt(),
+            handleDepartureTimePrompt(),
+            tapBookIntercityTrip(),
             handleForMePrompt(),
             tapConfirmPickup()
         )
@@ -141,7 +187,7 @@ object UberScript {
     private fun verifyAppInstalled(context: Context) = AutomationStep(
         name = "Verify Uber installed",
         waitCondition = { true },
-        timeoutMs = 2_000,
+        timeoutMs = 5_000,
         action = { _, _ ->
             if (AutomationEngine.isAppInstalled(context, PACKAGE)) {
                 StepResult.Success
@@ -518,6 +564,10 @@ object UberScript {
                 }
             }
 
+            // Brief pause for the most relevant result to settle at the top
+            kotlinx.coroutines.delay(50)
+
+            val isPlusCodePickup = isPlusCode(pickupAddress)
             val pickupWords = pickupAddress.split(" ").filter { it.length > 2 }
             val screenHeight = ActionExecutor.getScreenSize(service).second
             val resultsMaxY = (screenHeight * 0.65).toInt()
@@ -569,20 +619,26 @@ object UberScript {
                 if (attempt < 3) kotlinx.coroutines.delay(1000)
             }
 
-            // Try accessibility — find clickable, NON-editable results
-            val clickableResults = NodeFinder.findAllNodesRecursive(root) {
-                it.isClickable && !it.isEditable && it.text != null && it.text.toString().length > 3
-            }
+            // Try accessibility — skip for Plus Codes (can't distinguish results from UI buttons)
+            if (!isPlusCodePickup) {
+                val clickableResults = NodeFinder.findAllNodesRecursive(root) {
+                    it.isClickable && !it.isEditable && it.text != null && it.text.toString().length > 3
+                }
 
-            val matchingResult = clickableResults.find { node ->
-                val text = node.text.toString()
-                pickupWords.any { word -> text.contains(word, ignoreCase = true) }
-            }
+                val uiTexts = setOf("Where to?", "Pick-up now", "For me",
+                    "Plan your trip", "Saved places", "Search in a different",
+                    "Get more results", "Set location on map")
+                val matchingResult = clickableResults.find { node ->
+                    val text = node.text.toString()
+                    pickupWords.any { word -> text.contains(word, ignoreCase = true) } &&
+                    uiTexts.none { text.contains(it, ignoreCase = true) }
+                }
 
-            if (matchingResult != null) {
-                Log.i(TAG, "Clicking pickup result via accessibility: ${matchingResult.text}")
-                if (ActionExecutor.click(matchingResult)) {
-                    return@AutomationStep StepResult.Success
+                if (matchingResult != null) {
+                    Log.i(TAG, "Clicking pickup result via accessibility: ${matchingResult.text}")
+                    if (ActionExecutor.click(matchingResult)) {
+                        return@AutomationStep StepResult.Success
+                    }
                 }
             }
 
@@ -840,7 +896,14 @@ object UberScript {
                         Log.i(TAG, "Already on ride options (verified=$verified, selected=$selected) — skipping")
                         return@AutomationStep StepResult.Skip("Already on ride options")
                     }
-                    // Typed but not yet selected — check if destination words match screen
+                    // For Plus Codes, the resolved address won't contain the code text,
+                    // but if we're on ride options it's correct (we just typed it)
+                    if (isPlusCode(destination)) {
+                        Log.i(TAG, "On ride options with Plus Code destination — accepting")
+                        stepContext.collectedData["uber_dest_selected"] = "true"
+                        return@AutomationStep StepResult.Skip("Already on ride options (Plus Code)")
+                    }
+                    // Check if destination words match screen
                     val destWords2 = destination.split(" ").filter { it.length > 2 }
                     val hasCorrectDest = destWords2.any { word ->
                         checkOcr.fullText.contains(word, ignoreCase = true)
@@ -855,8 +918,11 @@ object UberScript {
                 }
             }
 
+            // Brief pause for the most relevant result to settle at the top
+            kotlinx.coroutines.delay(50)
             Log.i(TAG, "Looking for search results...")
 
+            val isPlusCodeDest = isPlusCode(destination)
             val destWords = destination.split(" ").filter { it.length > 2 }
             val screenHeight = ActionExecutor.getScreenSize(service).second
             val resultsMaxY = (screenHeight * 0.65).toInt()
@@ -912,28 +978,34 @@ object UberScript {
                 if (attempt < 4) kotlinx.coroutines.delay(1000)
             }
 
-            // Try accessibility — find clickable, NON-editable results matching destination
-            // (editable nodes are the search input fields, not results)
-            val clickableResults = NodeFinder.findAllNodesRecursive(root) {
-                it.isClickable && !it.isEditable && it.text != null && it.text.toString().length > 3
-            }
+            // Try accessibility — find clickable, NON-editable results matching destination.
+            // Skip this for Plus Codes: we can't reliably distinguish search results from
+            // UI buttons (like "Pick-up now") without word matching, so go straight to OCR
+            // which has proper Y-range filtering.
+            if (!isPlusCodeDest) {
+                val clickableResults = NodeFinder.findAllNodesRecursive(root) {
+                    it.isClickable && !it.isEditable && it.text != null && it.text.toString().length > 3
+                }
 
-            for (node in clickableResults) {
-                Log.i(TAG, "Clickable node: '${node.text}' editable=${node.isEditable}")
-            }
+                for (node in clickableResults) {
+                    Log.i(TAG, "Clickable node: '${node.text}' editable=${node.isEditable}")
+                }
 
-            val matchingResult = clickableResults.find { node ->
-                val text = node.text.toString()
-                destWords.any { word -> text.contains(word, ignoreCase = true) } &&
-                // Must not be a search field hint
-                !text.equals("Where to?", ignoreCase = true)
-            }
+                val uiTexts = setOf("Where to?", "Pick-up now", "For me",
+                    "Plan your trip", "Saved places", "Search in a different",
+                    "Get more results", "Set location on map")
+                val matchingResult = clickableResults.find { node ->
+                    val text = node.text.toString()
+                    destWords.any { word -> text.contains(word, ignoreCase = true) } &&
+                    uiTexts.none { text.contains(it, ignoreCase = true) }
+                }
 
-            if (matchingResult != null) {
-                Log.i(TAG, "Clicking matching result via accessibility: ${matchingResult.text}")
-                if (ActionExecutor.click(matchingResult)) {
-                    stepContext.collectedData["uber_dest_selected"] = "true"
-                    return@AutomationStep StepResult.Success
+                if (matchingResult != null) {
+                    Log.i(TAG, "Clicking matching result via accessibility: ${matchingResult.text}")
+                    if (ActionExecutor.click(matchingResult)) {
+                        stepContext.collectedData["uber_dest_selected"] = "true"
+                        return@AutomationStep StepResult.Success
+                    }
                 }
             }
 
@@ -986,16 +1058,17 @@ object UberScript {
                     return@AutomationStep StepResult.Success
                 }
 
-                // Strategy 3: Only tap first result if it looks like an actual search result
-                // (contains a distance like "6.9 mi" or an address-like pattern).
-                // Never blindly tap — that's how we get wrong destinations.
+                // Strategy 3: Tap first result if it's a Plus Code destination (the app
+                // resolves it to an address that won't match the Plus Code words), or if
+                // the result looks like an actual search result.
                 val firstResult = resultCandidates.firstOrNull()
                 if (firstResult?.bounds != null) {
-                    val looksLikeResult = firstResult.text.contains(Regex("\\d+\\.?\\d*\\s*mi\\b")) ||
+                    val looksLikeResult = isPlusCodeDest ||
+                            firstResult.text.contains(Regex("\\d+\\.?\\d*\\s*mi\\b")) ||
                             destWords.any { word -> firstResult.text.contains(word, ignoreCase = true) }
                     if (looksLikeResult) {
                         val b = firstResult.bounds!!
-                        Log.w(TAG, "Tapping first result as fallback: '${firstResult.text}'")
+                        Log.i(TAG, "Tapping first result (plusCode=$isPlusCodeDest): '${firstResult.text}'")
                         ActionExecutor.tapAtCoordinates(service, leftTapX, b.centerY().toFloat())
                         stepContext.collectedData["uber_dest_selected"] = "true"
                         return@AutomationStep StepResult.Success
@@ -1017,8 +1090,8 @@ object UberScript {
         waitCondition = { root ->
             root.packageName?.toString() == PACKAGE
         },
-        timeoutMs = 20_000,
-        maxRetries = 6,
+        timeoutMs = 30_000,
+        maxRetries = 15,
         action = { _, _ ->
             val service = AutomataAccessibilityService.instance.value
                 ?: return@AutomationStep StepResult.Failure("No accessibility service")
@@ -1068,8 +1141,8 @@ object UberScript {
         waitCondition = { root ->
             root.packageName?.toString() == PACKAGE
         },
-        timeoutMs = 15_000,
-        maxRetries = 5,
+        timeoutMs = 30_000,
+        maxRetries = 15,
         action = { _, stepContext ->
             val service = AutomataAccessibilityService.instance.value
                 ?: return@AutomationStep StepResult.Failure("No accessibility service")
@@ -1080,10 +1153,53 @@ object UberScript {
             if (ocr != null) {
                 Log.i(TAG, "Price reading OCR: ${ocr.fullText.take(500)}")
 
-                // Find the ride type label
-                val rideTypeBlocks = ScreenReader.findTextBlocks(ocr, uberRideType)
+                // Try to find the ride type label — also check intercity variant
+                val intercityVariant = "$uberRideType Intercity"
+                var rideTypeBlocks = ScreenReader.findTextBlocks(ocr, uberRideType)
+                var matchedLabel = uberRideType
+
+                // If exact match not found, try the intercity variant
                 if (rideTypeBlocks.isEmpty() || rideTypeBlocks.first().bounds == null) {
-                    Log.w(TAG, "Ride type '$uberRideType' not found in OCR")
+                    val intercityBlocks = ScreenReader.findTextBlocks(ocr, intercityVariant)
+                    if (intercityBlocks.isNotEmpty() && intercityBlocks.first().bounds != null) {
+                        rideTypeBlocks = intercityBlocks
+                        matchedLabel = intercityVariant
+                        Log.i(TAG, "Using intercity variant: $intercityVariant")
+                    }
+                }
+
+                // If still not found, try partial match (OCR might read "TukIntercity" without space)
+                if (rideTypeBlocks.isEmpty() || rideTypeBlocks.first().bounds == null) {
+                    val partialMatch = ocr.blocks.filter { block ->
+                        block.text.contains(uberRideType, ignoreCase = true) && block.bounds != null
+                    }
+                    if (partialMatch.isNotEmpty()) {
+                        rideTypeBlocks = partialMatch
+                        matchedLabel = partialMatch.first().text
+                        Log.i(TAG, "Partial match found: '$matchedLabel'")
+                    }
+                }
+
+                if (rideTypeBlocks.isEmpty() || rideTypeBlocks.first().bounds == null) {
+                    // Detect what ride types ARE available to give a helpful error
+                    val availableTypes = ALL_RIDE_TYPES.filter { type ->
+                        ocr.blocks.any { block ->
+                            block.text.contains(type, ignoreCase = true)
+                        }
+                    }
+                    val retryCount = stepContext.collectedData["price_retry_count"]?.toIntOrNull() ?: 0
+                    stepContext.collectedData["price_retry_count"] = (retryCount + 1).toString()
+
+                    if (retryCount >= 5 && availableTypes.isNotEmpty()) {
+                        // We've tried enough — the ride type genuinely isn't available
+                        val available = availableTypes.joinToString(", ")
+                        Log.w(TAG, "'$uberRideType' not available. Available: $available")
+                        return@AutomationStep StepResult.Failure(
+                            "RIDE_TYPE_UNAVAILABLE:$uberRideType:$available"
+                        )
+                    }
+
+                    Log.w(TAG, "Ride type '$uberRideType' not found in OCR (retry $retryCount, available: ${availableTypes.joinToString()})")
                     return@AutomationStep StepResult.Retry("Ride type label not visible")
                 }
                 val rideBounds = rideTypeBlocks.first().bounds!!
@@ -1196,10 +1312,10 @@ object UberScript {
         waitCondition = { root ->
             root.packageName?.toString() == PACKAGE
         },
-        timeoutMs = 15_000,
+        timeoutMs = 20_000,
         delayAfterMs = 2000,
-        maxRetries = 5,
-        action = { _, _ ->
+        maxRetries = 10,
+        action = { _, stepContext ->
             val service = AutomataAccessibilityService.instance.value
                 ?: return@AutomationStep StepResult.Failure("No accessibility service")
 
@@ -1207,31 +1323,73 @@ object UberScript {
             if (ocr != null) {
                 Log.i(TAG, "Ride options screen: ${ocr.fullText.take(400)}")
 
-                // Check if already selected (Choose button shows our type)
+                // Check if already selected (Choose button shows our type or intercity variant)
                 val chooseText = "Choose $uberRideType"
-                if (ocr.fullText.contains(chooseText, ignoreCase = true)) {
-                    Log.i(TAG, "'$chooseText' already visible — ride type already selected")
+                val chooseIntercity = "Choose $uberRideType Intercity"
+                if (ocr.fullText.contains(chooseText, ignoreCase = true) ||
+                    ocr.fullText.contains(chooseIntercity, ignoreCase = true)) {
+                    Log.i(TAG, "Ride type already selected")
                     return@AutomationStep StepResult.Success
                 }
 
-                // Find the ride type label via OCR and tap it with coordinates
-                // (accessibility clicks don't reliably select ride types in Uber)
-                val blocks = ScreenReader.findTextBlocks(ocr, uberRideType)
+                // Try exact match first, then intercity variant, then partial match
+                val intercityVariant = "$uberRideType Intercity"
+                var blocks = ScreenReader.findTextBlocks(ocr, uberRideType)
+                var tappingLabel = uberRideType
+
+                if (blocks.isEmpty() || blocks.first().bounds == null) {
+                    val intercityBlocks = ScreenReader.findTextBlocks(ocr, intercityVariant)
+                    if (intercityBlocks.isNotEmpty() && intercityBlocks.first().bounds != null) {
+                        blocks = intercityBlocks
+                        tappingLabel = intercityVariant
+                    }
+                }
+
+                // Partial match (OCR might concatenate words)
+                if (blocks.isEmpty() || blocks.first().bounds == null) {
+                    val partialMatch = ocr.blocks.filter { block ->
+                        block.text.contains(uberRideType, ignoreCase = true) && block.bounds != null
+                    }
+                    if (partialMatch.isNotEmpty()) {
+                        blocks = partialMatch
+                        tappingLabel = partialMatch.first().text
+                    }
+                }
+
                 if (blocks.isNotEmpty() && blocks.first().bounds != null) {
                     val b = blocks.first().bounds!!
-                    Log.i(TAG, "Tapping ride type '$uberRideType' via OCR at (${b.centerX()}, ${b.centerY()})")
+                    Log.i(TAG, "Tapping ride type '$tappingLabel' via OCR at (${b.centerX()}, ${b.centerY()})")
                     ActionExecutor.tapAtCoordinates(service, b.centerX().toFloat(), b.centerY().toFloat())
 
                     // Verify selection worked
                     kotlinx.coroutines.delay(1500)
                     val afterOcr = ScreenReader.captureAndRead(service)
-                    if (afterOcr != null && afterOcr.fullText.contains(chooseText, ignoreCase = true)) {
-                        Log.i(TAG, "'$chooseText' appeared — selection confirmed")
+                    if (afterOcr != null && (
+                        afterOcr.fullText.contains("Choose", ignoreCase = true) &&
+                        afterOcr.fullText.contains(uberRideType, ignoreCase = true))) {
+                        Log.i(TAG, "Selection confirmed for '$tappingLabel'")
                         return@AutomationStep StepResult.Success
                     }
 
-                    Log.w(TAG, "Tapped '$uberRideType' but '$chooseText' not visible yet")
+                    Log.w(TAG, "Tapped '$tappingLabel' but Choose button not visible yet")
                     return@AutomationStep StepResult.Retry("Selection not confirmed")
+                }
+
+                // Ride type not found — check what's available
+                val retryCount = stepContext.collectedData["select_retry_count"]?.toIntOrNull() ?: 0
+                stepContext.collectedData["select_retry_count"] = (retryCount + 1).toString()
+
+                if (retryCount >= 4) {
+                    val availableTypes = ALL_RIDE_TYPES.filter { type ->
+                        ocr.blocks.any { block -> block.text.contains(type, ignoreCase = true) }
+                    }
+                    if (availableTypes.isNotEmpty()) {
+                        val available = availableTypes.joinToString(", ")
+                        Log.w(TAG, "'$uberRideType' not available. Available: $available")
+                        return@AutomationStep StepResult.Failure(
+                            "RIDE_TYPE_UNAVAILABLE:$uberRideType:$available"
+                        )
+                    }
                 }
             }
 
@@ -1467,6 +1625,308 @@ object UberScript {
             }
 
             StepResult.Retry("Ride options not loaded after navigation")
+        }
+    )
+
+    /**
+     * Handle the intercity trip type selection prompt.
+     * For long-distance routes, after tapping "Choose [type] Intercity", Uber asks
+     * whether to book a one-way or round trip. Always selects one-way and taps Continue.
+     * Skips if the prompt doesn't appear (non-intercity routes).
+     */
+    private fun handleIntercityTripPrompt() = AutomationStep(
+        name = "Handle intercity trip prompt (if any)",
+        waitCondition = { root ->
+            root.packageName?.toString() == PACKAGE
+        },
+        timeoutMs = 10_000,
+        delayAfterMs = 1000,
+        maxRetries = 3,
+        action = { root, _ ->
+            val service = AutomataAccessibilityService.instance.value
+                ?: return@AutomationStep StepResult.Failure("No accessibility service")
+
+            var ocr = ScreenReader.captureAndRead(service)
+            if (ocr != null) {
+                Log.i(TAG, "Intercity prompt check: ${ocr.fullText.take(400)}")
+
+                // If the Automata comparison overlay is blocking the screen, dismiss it first.
+                // The overlay shows "Booking [app]" with a "Close" button.
+                val hasOverlay = ocr.fullText.contains("Booking", ignoreCase = true) &&
+                        ocr.fullText.contains("Close", ignoreCase = true) &&
+                        (ocr.fullText.contains("save Rs", ignoreCase = true) ||
+                                ocr.fullText.contains("only option", ignoreCase = true))
+                if (hasOverlay) {
+                    Log.i(TAG, "Comparison overlay detected, dismissing first")
+                    val closeNode = NodeFinder.findByText(root, "Close")
+                    if (closeNode != null) {
+                        ActionExecutor.click(closeNode)
+                    } else {
+                        val closeBlocks = ScreenReader.findTextBlocks(ocr, "Close")
+                        if (closeBlocks.isNotEmpty() && closeBlocks.first().bounds != null) {
+                            val b = closeBlocks.first().bounds!!
+                            ActionExecutor.tapAtCoordinates(service, b.centerX().toFloat(), b.centerY().toFloat())
+                        }
+                    }
+                    kotlinx.coroutines.delay(500)
+                    // Re-read screen after overlay dismissal
+                    ocr = ScreenReader.captureAndRead(service)
+                    if (ocr != null) {
+                        Log.i(TAG, "After overlay dismiss: ${ocr.fullText.take(400)}")
+                    }
+                }
+            }
+
+            if (ocr != null) {
+                // Check if we're on the intercity trip selection screen
+                val hasSelectOption = ocr.fullText.contains("Select an option", ignoreCase = true)
+                val hasOneWay = ocr.fullText.contains("One-way trip", ignoreCase = true) ||
+                        ocr.fullText.contains("One way", ignoreCase = true)
+                val hasRoundTrip = ocr.fullText.contains("Round trip", ignoreCase = true)
+                // Fallback: detect partial text visible even if overlay partially covered the screen
+                val hasIntercityHint = ocr.fullText.contains("multiple bookings", ignoreCase = true) ||
+                        ocr.fullText.contains("avoid the hassle", ignoreCase = true) ||
+                        ocr.fullText.contains("dropped off at", ignoreCase = true)
+                val hasContinue = ocr.fullText.contains("Continue", ignoreCase = true)
+
+                if (!hasSelectOption && !hasOneWay && !hasRoundTrip && !(hasIntercityHint && hasContinue)) {
+                    Log.i(TAG, "No intercity trip prompt detected, skipping")
+                    return@AutomationStep StepResult.Skip("No intercity trip prompt")
+                }
+
+                Log.i(TAG, "Intercity trip prompt detected, selecting one-way trip")
+
+                // Always select one-way. Use OCR first — accessibility's substring matching
+                // on Uber's custom views can match parent containers (clicking their center
+                // hits the wrong option).
+                var tappedOption = false
+
+                // OCR first — gives exact text positions
+                val blocks = ScreenReader.findTextBlocks(ocr, "One-way trip")
+                    .ifEmpty { ScreenReader.findTextBlocks(ocr, "One way") }
+                    .ifEmpty { ScreenReader.findTextBlocks(ocr, "Get dropped off") }
+                if (blocks.isNotEmpty() && blocks.first().bounds != null) {
+                    val b = blocks.first().bounds!!
+                    Log.i(TAG, "Tapping 'One-way trip' via OCR at (${b.centerX()}, ${b.centerY()})")
+                    ActionExecutor.tapAtCoordinates(service, b.centerX().toFloat(), b.centerY().toFloat())
+                    tappedOption = true
+                } else {
+                    // Accessibility fallback — find the deepest node whose text contains "One-way"
+                    // but NOT "Round" to avoid hitting the wrong option
+                    val allNodes = NodeFinder.findAllByText(root, "One-way trip")
+                    val node = allNodes.firstOrNull { n ->
+                        val t = n.text?.toString() ?: ""
+                        t.contains("One-way", ignoreCase = true) && !t.contains("Round", ignoreCase = true)
+                    } ?: allNodes.firstOrNull()
+                    if (node != null) {
+                        Log.i(TAG, "Tapping 'One-way trip' via accessibility (text='${node.text}')")
+                        ActionExecutor.click(node)
+                        tappedOption = true
+                    }
+                }
+
+                if (!tappedOption) {
+                    Log.w(TAG, "Could not find 'One-way trip' to tap, retrying")
+                    return@AutomationStep StepResult.Retry("Could not find 'One-way trip'")
+                }
+
+                // Small delay for selection to register, then tap Continue
+                kotlinx.coroutines.delay(500)
+                return@AutomationStep tapContinueButton(service, root)
+            }
+
+            Log.i(TAG, "No intercity trip prompt detected, skipping")
+            StepResult.Skip("No intercity trip prompt")
+        }
+    )
+
+    /**
+     * Handle the intercity departure time prompt.
+     * After selecting one-way/round trip, Uber asks "When do you want to leave?"
+     * with "Leave now" and "Reserve a trip" options. Always selects "Leave now".
+     * Skips if the prompt doesn't appear (non-intercity routes).
+     */
+    private fun handleDepartureTimePrompt() = AutomationStep(
+        name = "Handle departure time prompt (if any)",
+        waitCondition = { root ->
+            root.packageName?.toString() == PACKAGE
+        },
+        timeoutMs = 8_000,
+        delayAfterMs = 1000,
+        maxRetries = 3,
+        action = { root, _ ->
+            val service = AutomataAccessibilityService.instance.value
+                ?: return@AutomationStep StepResult.Failure("No accessibility service")
+
+            val ocr = ScreenReader.captureAndRead(service)
+            if (ocr != null) {
+                Log.i(TAG, "Departure time check: ${ocr.fullText.take(400)}")
+
+                val hasLeaveNow = ocr.fullText.contains("Leave now", ignoreCase = true)
+                val hasReserve = ocr.fullText.contains("Reserve a trip", ignoreCase = true) ||
+                        ocr.fullText.contains("Reserve", ignoreCase = true)
+                val hasWhenLeave = ocr.fullText.contains("want to leave", ignoreCase = true)
+
+                if (!hasLeaveNow && !hasReserve && !hasWhenLeave) {
+                    Log.i(TAG, "No departure time prompt detected, skipping")
+                    return@AutomationStep StepResult.Skip("No departure time prompt")
+                }
+
+                Log.i(TAG, "Departure time prompt detected, selecting 'Leave now'")
+
+                // Use OCR first — accessibility's substring matching on Uber's custom views
+                // can match parent containers, clicking their center hits "Reserve" instead.
+                var tappedLeaveNow = false
+
+                // OCR first — gives exact text positions
+                val blocks = ScreenReader.findTextBlocks(ocr, "Leave now")
+                    .ifEmpty { ScreenReader.findTextBlocks(ocr, "Leave Now") }
+                if (blocks.isNotEmpty() && blocks.first().bounds != null) {
+                    val b = blocks.first().bounds!!
+                    Log.i(TAG, "Tapping 'Leave now' via OCR at (${b.centerX()}, ${b.centerY()})")
+                    ActionExecutor.tapAtCoordinates(service, b.centerX().toFloat(), b.centerY().toFloat())
+                    tappedLeaveNow = true
+                } else {
+                    // Accessibility fallback — find a node whose text contains "Leave"
+                    // but NOT "Reserve" to avoid hitting the wrong radio button
+                    val allNodes = NodeFinder.findAllByText(root, "Leave now")
+                    val node = allNodes.firstOrNull { n ->
+                        val t = n.text?.toString() ?: ""
+                        t.contains("Leave", ignoreCase = true) && !t.contains("Reserve", ignoreCase = true)
+                    } ?: allNodes.firstOrNull()
+                    if (node != null) {
+                        Log.i(TAG, "Tapping 'Leave now' via accessibility (text='${node.text}')")
+                        ActionExecutor.click(node)
+                        tappedLeaveNow = true
+                    }
+                }
+
+                if (!tappedLeaveNow) {
+                    Log.w(TAG, "Could not find 'Leave now' to tap, retrying")
+                    return@AutomationStep StepResult.Retry("Could not find 'Leave now'")
+                }
+
+                // Tap Continue only after confirming Leave now was tapped
+                kotlinx.coroutines.delay(500)
+                return@AutomationStep tapContinueButton(service, root)
+            }
+
+            Log.i(TAG, "No departure time prompt detected, skipping")
+            StepResult.Skip("No departure time prompt")
+        }
+    )
+
+    /**
+     * Tap the "Book intercity trip" button on the trip summary screen.
+     * This appears after selecting departure time for intercity routes.
+     * Skips if not shown (non-intercity routes).
+     * Also handles the return date picker screen (if it somehow appears) by pressing back.
+     *
+     * IMPORTANT: The previous step taps "Continue" and this screen takes 1-2s to load.
+     * If OCR reads too early during the transition, it sees only the status bar and
+     * incorrectly skips. We use delayBeforeMs and a short-text guard to handle this.
+     */
+    private fun tapBookIntercityTrip() = AutomationStep(
+        name = "Tap Book intercity trip (if any)",
+        waitCondition = { root ->
+            root.packageName?.toString() == PACKAGE
+        },
+        timeoutMs = 15_000,
+        delayBeforeMs = 1500,
+        delayAfterMs = 2000,
+        maxRetries = 5,
+        action = { root, _ ->
+            val service = AutomataAccessibilityService.instance.value
+                ?: return@AutomationStep StepResult.Failure("No accessibility service")
+
+            val ocr = ScreenReader.captureAndRead(service)
+            if (ocr != null) {
+                Log.i(TAG, "Book intercity check: ${ocr.fullText.take(500)}")
+
+                // Guard: if OCR text is very short, the screen is still transitioning.
+                // Retry instead of making a skip decision on incomplete data.
+                val meaningfulText = ocr.fullText.replace(Regex("[\\d:•\\s]+"), "").trim()
+                if (meaningfulText.length < 30) {
+                    Log.i(TAG, "Screen still loading (text too short: ${meaningfulText.length} chars), retrying")
+                    return@AutomationStep StepResult.Retry("Screen still loading")
+                }
+
+                // Check if we're already past this screen
+                if (ocr.fullText.contains("Confirm pickup", ignoreCase = true) ||
+                    ocr.fullText.contains("Confirm pick-up", ignoreCase = true) ||
+                    ocr.fullText.contains("Looking for", ignoreCase = true) ||
+                    ocr.fullText.contains("Requesting", ignoreCase = true) ||
+                    ocr.fullText.contains("For me", ignoreCase = true) ||
+                    ocr.fullText.contains("someone else", ignoreCase = true)) {
+                    Log.i(TAG, "Already past trip summary, skipping")
+                    return@AutomationStep StepResult.Skip("Already past trip summary")
+                }
+
+                // Safety net: if the return date picker somehow appeared (e.g., round trip
+                // was pre-selected), press back to go back to the trip type screen.
+                if (ocr.fullText.contains("want to be back", ignoreCase = true) ||
+                    ocr.fullText.contains("return date", ignoreCase = true) ||
+                    ocr.fullText.contains("want to come back", ignoreCase = true)) {
+                    Log.w(TAG, "Return date picker detected — pressing back to escape")
+                    ActionExecutor.pressBack(service)
+                    kotlinx.coroutines.delay(500)
+                    return@AutomationStep StepResult.Retry("Return date picker appeared, pressing back")
+                }
+
+                // Not an intercity route — no intercity-related text at all.
+                // Check multiple indicators: "intercity", "trip summary", "Itinerary"
+                if (!ocr.fullText.contains("intercity", ignoreCase = true) &&
+                    !ocr.fullText.contains("trip summary", ignoreCase = true) &&
+                    !ocr.fullText.contains("trip details", ignoreCase = true) &&
+                    !ocr.fullText.contains("Itinerary", ignoreCase = true)) {
+                    Log.i(TAG, "No intercity trip summary detected, skipping")
+                    return@AutomationStep StepResult.Skip("No intercity trip summary")
+                }
+
+                // OCR first — look for "Book intercity trip" or partial matches
+                val screenHeight = ActionExecutor.getScreenSize(service).second
+                val blocks = ScreenReader.findTextBlocks(ocr, "Book intercity trip")
+                    .ifEmpty { ScreenReader.findTextBlocks(ocr, "Book intercity") }
+                    .ifEmpty { ScreenReader.findTextBlocks(ocr, "Book Intercity") }
+                    .ifEmpty {
+                        // OCR might split text; find any "Book" in the bottom third of screen
+                        ScreenReader.findTextBlocks(ocr, "Book")
+                            .filter { block ->
+                                val y = block.bounds?.centerY() ?: 0
+                                y > screenHeight * 2 / 3
+                            }
+                    }
+                if (blocks.isNotEmpty() && blocks.first().bounds != null) {
+                    val b = blocks.first().bounds!!
+                    Log.i(TAG, "Tapping 'Book intercity trip' via OCR at (${b.centerX()}, ${b.centerY()})")
+                    ActionExecutor.tapAtCoordinates(service, b.centerX().toFloat(), b.centerY().toFloat())
+                    return@AutomationStep StepResult.Success
+                }
+
+                // Accessibility fallback — try multiple text patterns
+                val node = NodeFinder.findByText(root, "Book intercity trip")
+                    ?: NodeFinder.findByText(root, "Book intercity")
+                    ?: NodeFinder.findByText(root, "Book Intercity")
+                    ?: run {
+                        // Look for any clickable "Book" node in the bottom half
+                        val allBookNodes = NodeFinder.findAllByText(root, "Book")
+                        allBookNodes.firstOrNull { n ->
+                            val rect = Rect()
+                            n.getBoundsInScreen(rect)
+                            rect.centerY() > screenHeight / 2
+                        }
+                    }
+                if (node != null) {
+                    Log.i(TAG, "Tapping 'Book intercity trip' via accessibility (text='${node.text}')")
+                    if (ActionExecutor.click(node)) {
+                        return@AutomationStep StepResult.Success
+                    }
+                }
+
+                Log.w(TAG, "Intercity text found but button not located, retrying")
+            }
+
+            StepResult.Retry("Waiting for trip summary screen")
         }
     )
 

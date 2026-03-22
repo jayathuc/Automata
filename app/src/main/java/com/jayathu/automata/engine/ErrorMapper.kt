@@ -98,6 +98,32 @@ object ErrorMapper {
             )
         }
 
+        // Ride type not available (intercity / limited options)
+        if (reason.startsWith("RIDE_TYPE_UNAVAILABLE:")) {
+            val parts = reason.split(":")
+            val requested = parts.getOrElse(1) { "selected" }
+            val available = parts.getOrElse(2) { "" }
+
+            val friendlyRequested = when (requested.lowercase()) {
+                "moto" -> "Bike/Moto"
+                "tuk" -> "Tuk"
+                "zip" -> "Car/Zip"
+                else -> requested
+            }
+
+            return if (available.isNotBlank()) {
+                Pair(
+                    "$friendlyRequested is not available for this route on Uber.",
+                    "Available options: $available. Try selecting a different ride type."
+                )
+            } else {
+                Pair(
+                    "$friendlyRequested is not available for this route on Uber.",
+                    "This may be an intercity route with limited options. Try a different ride type."
+                )
+            }
+        }
+
         // Price reading failures
         if (reason.contains("Could not determine prices", true) || reason.contains("No price found", true)) {
             return Pair(
@@ -166,6 +192,16 @@ object ErrorMapper {
                 Pair(
                     "Could not enter the destination after multiple attempts.",
                     "Check the destination address and make sure you have internet."
+                )
+            stepName.contains("intercity", true) || stepName.contains("departure time", true) ->
+                Pair(
+                    "Could not complete the intercity booking flow.",
+                    "The Uber app may have changed its layout. Try booking manually."
+                )
+            stepName.contains("Confirm", true) && stepName.contains("pickup", true) ->
+                Pair(
+                    "Could not confirm the pickup location.",
+                    "The app screen may have changed. Check the app manually."
                 )
             stepName.contains("pickup", true) ->
                 Pair(

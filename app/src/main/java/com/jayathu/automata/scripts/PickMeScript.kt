@@ -36,6 +36,10 @@ object PickMeScript {
 
     private const val TAG = "PickMeScript"
     private const val PACKAGE = "com.pickme.passenger"
+
+    // Plus Codes contain a '+' and match this pattern (e.g. "6JRXVVW4+8GQ")
+    private val PLUS_CODE_REGEX = Regex("^[2-9A-Z]{4,8}\\+[2-9A-Z]{2,4}$", RegexOption.IGNORE_CASE)
+    private fun isPlusCode(text: String) = PLUS_CODE_REGEX.matches(text.trim())
     /** Screen center X, computed dynamically per-action from actual display metrics. */
     private fun screenCenterX(service: android.accessibilityservice.AccessibilityService): Float =
         ActionExecutor.screenCenterX(service)
@@ -67,7 +71,8 @@ object PickMeScript {
         return when (rideType.lowercase()) {
             "moto", "bike", "motorcycle" -> "Bike"
             "tuk", "tuktuk", "three-wheeler" -> "Tuk"
-            "car", "flex", "mini", "nano" -> rideType // Keep as-is for PickMe
+            "car", "zip" -> "Flex"
+            "flex", "mini", "nano" -> rideType
             else -> rideType
         }
     }
@@ -131,7 +136,7 @@ object PickMeScript {
     private fun verifyAppInstalled(context: Context) = AutomationStep(
         name = "Verify PickMe installed",
         waitCondition = { true },
-        timeoutMs = 2_000,
+        timeoutMs = 5_000,
         action = { _, _ ->
             if (AutomationEngine.isAppInstalled(context, PACKAGE)) {
                 StepResult.Success
@@ -453,6 +458,9 @@ object PickMeScript {
             val service = AutomataAccessibilityService.instance.value
                 ?: return@AutomationStep StepResult.Failure("No accessibility service")
 
+            // Brief pause for the most relevant result to settle at the top
+            kotlinx.coroutines.delay(50)
+
             val ocr = ScreenReader.captureAndRead(service)
             if (ocr != null) {
                 Log.i(TAG, "Pickup search results OCR: ${ocr.fullText.take(400)}")
@@ -469,23 +477,27 @@ object PickMeScript {
                     }
                     .sortedBy { it.bounds?.top ?: Int.MAX_VALUE }
 
-                // Match by pickup address words
-                val pickupWords = pickupAddress.split(" ").filter { it.length > 2 }
-                for (word in pickupWords) {
-                    val match = resultCandidates.find { it.text.contains(word, ignoreCase = true) }
-                    if (match?.bounds != null) {
-                        val b = match.bounds!!
-                        Log.i(TAG, "Tapping pickup result matching '$word': '${match.text}' at (${screenCenterX(service)}, ${b.centerY()})")
-                        ActionExecutor.tapAtCoordinates(service, screenCenterX(service), b.centerY().toFloat())
-                        return@AutomationStep StepResult.Success
+                val isPlusCodePickup = isPlusCode(pickupAddress)
+
+                // For Plus Codes, skip word matching — the resolved address won't match
+                if (!isPlusCodePickup) {
+                    val pickupWords = pickupAddress.split(" ").filter { it.length > 2 }
+                    for (word in pickupWords) {
+                        val match = resultCandidates.find { it.text.contains(word, ignoreCase = true) }
+                        if (match?.bounds != null) {
+                            val b = match.bounds!!
+                            Log.i(TAG, "Tapping pickup result matching '$word': '${match.text}' at (${screenCenterX(service)}, ${b.centerY()})")
+                            ActionExecutor.tapAtCoordinates(service, screenCenterX(service), b.centerY().toFloat())
+                            return@AutomationStep StepResult.Success
+                        }
                     }
                 }
 
-                // Fallback: first result
+                // Tap the first result — handles Plus Codes and short addresses
                 val firstResult = resultCandidates.firstOrNull()
                 if (firstResult?.bounds != null) {
                     val b = firstResult.bounds!!
-                    Log.i(TAG, "Tapping first pickup result: '${firstResult.text}' at (${screenCenterX(service)}, ${b.centerY()})")
+                    Log.i(TAG, "Tapping first pickup result (plusCode=$isPlusCodePickup): '${firstResult.text}' at (${screenCenterX(service)}, ${b.centerY()})")
                     ActionExecutor.tapAtCoordinates(service, screenCenterX(service), b.centerY().toFloat())
                     return@AutomationStep StepResult.Success
                 }
@@ -607,6 +619,8 @@ object PickMeScript {
             val service = AutomataAccessibilityService.instance.value
                 ?: return@AutomationStep StepResult.Failure("No accessibility service")
 
+            // Brief pause for the most relevant result to settle at the top
+            kotlinx.coroutines.delay(50)
             Log.i(TAG, "Looking for search results via OCR...")
 
             // Use OCR to find the search result and tap it via coordinates
@@ -629,24 +643,28 @@ object PickMeScript {
                     }
                     .sortedBy { it.bounds?.top ?: Int.MAX_VALUE }
 
-                // Try matching by destination words first
-                val destWords = destination.split(" ").filter { it.length > 2 }
-                for (word in destWords) {
-                    val match = resultCandidates.find { it.text.contains(word, ignoreCase = true) }
-                    if (match?.bounds != null) {
-                        val b = match.bounds!!
-                        Log.i(TAG, "Tapping result matching '$word': '${match.text}' at (${screenCenterX(service)}, ${b.centerY()})")
-                        ActionExecutor.tapAtCoordinates(service, screenCenterX(service), b.centerY().toFloat())
-                        return@AutomationStep StepResult.Success
+                val isPlusCodeDest = isPlusCode(destination)
+
+                // For Plus Codes, skip word matching — the resolved address won't
+                // contain the Plus Code text. Just tap the first result.
+                if (!isPlusCodeDest) {
+                    val destWords = destination.split(" ").filter { it.length > 2 }
+                    for (word in destWords) {
+                        val match = resultCandidates.find { it.text.contains(word, ignoreCase = true) }
+                        if (match?.bounds != null) {
+                            val b = match.bounds!!
+                            Log.i(TAG, "Tapping result matching '$word': '${match.text}' at (${screenCenterX(service)}, ${b.centerY()})")
+                            ActionExecutor.tapAtCoordinates(service, screenCenterX(service), b.centerY().toFloat())
+                            return@AutomationStep StepResult.Success
+                        }
                     }
                 }
 
-                // Fallback: tap the FIRST result in the list area
-                // This handles short/generic destinations like "Home"
+                // Tap the first result — handles Plus Codes and short/generic destinations
                 val firstResult = resultCandidates.firstOrNull()
                 if (firstResult?.bounds != null) {
                     val b = firstResult.bounds!!
-                    Log.i(TAG, "Tapping first result: '${firstResult.text}' at (${screenCenterX(service)}, ${b.centerY()})")
+                    Log.i(TAG, "Tapping first result (plusCode=$isPlusCodeDest): '${firstResult.text}' at (${screenCenterX(service)}, ${b.centerY()})")
                     ActionExecutor.tapAtCoordinates(service, screenCenterX(service), b.centerY().toFloat())
                     return@AutomationStep StepResult.Success
                 }
@@ -664,8 +682,8 @@ object PickMeScript {
         waitCondition = { root ->
             root.packageName?.toString() == PACKAGE
         },
-        timeoutMs = 20_000,
-        maxRetries = 6,
+        timeoutMs = 30_000,
+        maxRetries = 15,
         action = { _, _ ->
             val service = AutomataAccessibilityService.instance.value
                 ?: return@AutomationStep StepResult.Failure("No accessibility service")
@@ -907,8 +925,8 @@ object PickMeScript {
         waitCondition = { root ->
             root.packageName?.toString() == PACKAGE
         },
-        timeoutMs = 15_000,
-        maxRetries = 5,
+        timeoutMs = 30_000,
+        maxRetries = 15,
         action = { _, stepContext ->
             val service = AutomataAccessibilityService.instance.value
                 ?: return@AutomationStep StepResult.Failure("No accessibility service")

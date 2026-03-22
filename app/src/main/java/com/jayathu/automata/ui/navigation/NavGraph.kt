@@ -67,8 +67,6 @@ fun AutomataNavGraph(
                 existingConfig = null,
                 pickedPickup = pickedPickup.value,
                 pickedDestination = pickedDestination.value,
-                onPickedPickupConsumed = { backStackEntry.savedStateHandle.remove<String>("picked_pickup") },
-                onPickedDestinationConsumed = { backStackEntry.savedStateHandle.remove<String>("picked_destination") },
                 onPickOnMap = { fieldKey -> navController.navigate(Routes.mapPicker(fieldKey)) },
                 onSave = { config ->
                     viewModel.saveTaskConfig(config)
@@ -103,8 +101,6 @@ fun AutomataNavGraph(
                     existingConfig = existingConfig,
                     pickedPickup = pickedPickup.value,
                     pickedDestination = pickedDestination.value,
-                    onPickedPickupConsumed = { backStackEntry.savedStateHandle.remove<String>("picked_pickup") },
-                    onPickedDestinationConsumed = { backStackEntry.savedStateHandle.remove<String>("picked_destination") },
                     onPickOnMap = { fieldKey -> navController.navigate(Routes.mapPicker(fieldKey)) },
                     onSave = { updated ->
                         viewModel.saveTaskConfig(updated)
