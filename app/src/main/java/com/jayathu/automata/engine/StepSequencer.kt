@@ -78,7 +78,7 @@ class StepSequencer(
         }
 
         _state.value = AutomationState.Done(context.collectedData.toMap())
-        Log.i(TAG, "Automation completed. Data: ${context.collectedData}")
+        SecureLog.verbose(TAG, "Automation completed. Data: ${context.collectedData}")
         return AutomationResult.Success(context.collectedData.toMap())
     }
 

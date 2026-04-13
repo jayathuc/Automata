@@ -15,6 +15,22 @@ class AutomataAccessibilityService : AccessibilityService() {
     companion object {
         private const val TAG = "AutomataA11y"
 
+        /** Packages the service is allowed to interact with */
+        val ALLOWED_PACKAGES = setOf(
+            "com.pickme.passenger",
+            "com.ubercab",
+            // System packages needed for navigation (home screen, settings, launcher)
+            "com.android.launcher",
+            "com.android.launcher3",
+            "com.google.android.apps.nexuslauncher",
+            "com.sec.android.app.launcher",       // Samsung
+            "com.miui.home",                       // Xiaomi
+            "com.huawei.android.launcher",         // Huawei
+            "com.android.settings",
+            "android",                             // System UI / dialogs
+            "com.android.systemui"
+        )
+
         private val _instance = MutableStateFlow<AutomataAccessibilityService?>(null)
         val instance: StateFlow<AutomataAccessibilityService?> = _instance.asStateFlow()
 
@@ -33,7 +49,11 @@ class AutomataAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
-        engine?.onAccessibilityEvent(event)
+        // Only forward events from allowed packages to the engine
+        val pkg = event.packageName?.toString() ?: return
+        if (pkg in ALLOWED_PACKAGES) {
+            engine?.onAccessibilityEvent(event)
+        }
     }
 
     override fun onInterrupt() {

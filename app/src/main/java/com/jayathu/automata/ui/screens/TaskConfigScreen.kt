@@ -46,6 +46,7 @@ fun TaskConfigScreen(
     existingConfig: TaskConfig?,
     pickedPickup: String? = null,
     pickedDestination: String? = null,
+    isSaving: Boolean = false,
     onPickOnMap: (fieldKey: String) -> Unit = {},
     onSave: (TaskConfig) -> Unit,
     onDelete: (() -> Unit)?,
@@ -221,7 +222,7 @@ fun TaskConfigScreen(
                     )
                 },
                 modifier = Modifier.fillMaxWidth(),
-                enabled = isValid
+                enabled = isValid && !isSaving
             ) {
                 Text(if (isEditing) "Update Task" else "Create Task")
             }

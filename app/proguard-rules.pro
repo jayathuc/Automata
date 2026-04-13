@@ -1,21 +1,33 @@
-# Add project specific ProGuard rules here.
-# You can control the set of applied configuration files using the
-# proguardFiles setting in build.gradle.
-#
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
+# Automata ProGuard Rules
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# Keep line numbers for crash reports
+-keepattributes SourceFile,LineNumberTable
+-renamesourcefileattribute SourceFile
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
+# Room
+-keep class * extends androidx.room.RoomDatabase
+-keep @androidx.room.Entity class *
+-dontwarn androidx.room.paging.**
 
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# ML Kit
+-keep class com.google.mlkit.** { *; }
+-dontwarn com.google.mlkit.**
+
+# OSMDroid
+-keep class org.osmdroid.** { *; }
+-dontwarn org.osmdroid.**
+
+# Open Location Code
+-keep class com.google.openlocationcode.** { *; }
+
+# Accessibility service — must not be renamed
+-keep class com.jayathu.automata.service.AutomataAccessibilityService { *; }
+
+# Notification listener — must not be renamed
+-keep class com.jayathu.automata.notification.RideNotificationListener { *; }
+
+# Compose — handled by default rules, but keep navigation arguments
+-keep class * extends androidx.navigation.NavArgs { *; }
+
+# Kotlin coroutines
+-dontwarn kotlinx.coroutines.**

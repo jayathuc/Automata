@@ -6,6 +6,7 @@ import android.graphics.Rect
 import android.provider.Settings
 import android.util.Log
 import com.jayathu.automata.engine.ActionExecutor
+import com.jayathu.automata.engine.SecureLog
 import com.jayathu.automata.engine.AutomationEngine
 import com.jayathu.automata.engine.AutomationStep
 import com.jayathu.automata.engine.NodeFinder
@@ -56,7 +57,7 @@ object PickMeScript {
 
         if (value >= 10000 && price.length >= 5) {
             val corrected = price.substring(0, price.length - 2) + "." + price.substring(price.length - 2)
-            Log.i(TAG, "Price normalization: '$price' → '$corrected' (likely dropped decimal)")
+            SecureLog.i(TAG, "Price normalization: '$price' → '$corrected' (likely dropped decimal)")
             return corrected
         }
 
@@ -82,7 +83,9 @@ object PickMeScript {
         val steps = mutableListOf(
             verifyAppInstalled(context),
             launchApp(context),
+            checkAppSetupComplete(),
             waitForHomeScreen(),
+            handleRidesUnavailable(context),
             checkAndEnableLocation(context),
             tapSearchBar()
         )
@@ -97,9 +100,7 @@ object PickMeScript {
             tapDropFieldAndEnterDestination(destination),
             selectSearchResult(destination),
             waitForRideOptions(),
-            // No need to tap/select ride type here — readPriceViaOcr uses
-            // X-proximity matching to find the price next to the ride type label.
-            // Selecting wastes time and can trigger unnecessary UI animations.
+            selectRideType(mappedType),
             readPriceViaOcr(mappedType)
         ))
 
@@ -113,6 +114,7 @@ object PickMeScript {
         // if on home screen, it navigates through the full search flow.
         return listOf(
             launchApp(context),
+            handleRidesUnavailable(context),
             checkAndEnableLocation(context),
             ensureOnRideOptionsScreen(destination, pickupAddress),
             selectRideType(mappedType),
@@ -189,6 +191,96 @@ object PickMeScript {
     )
 
     /**
+     * Detects if PickMe is showing a first-time setup screen (language selection,
+     * registration, permissions) and fails with a clear message.
+     */
+    private fun checkAppSetupComplete() = AutomationStep(
+        name = "Check PickMe setup",
+        waitCondition = { root ->
+            root.packageName?.toString() == PACKAGE
+        },
+        timeoutMs = 5_000,
+        action = { _, _ ->
+            val service = AutomataAccessibilityService.instance.value
+                ?: return@AutomationStep StepResult.Skip("No accessibility service")
+
+            val ocr = ScreenReader.captureAndRead(service)
+            if (ocr == null) {
+                return@AutomationStep StepResult.Skip("Could not capture screen")
+            }
+
+            val text = ocr.fullText.lowercase()
+            SecureLog.verbose(TAG, "Setup check OCR: ${ocr.fullText.take(300)}")
+
+            val isSetupScreen = text.contains("select your language") ||
+                    text.contains("choose your language") ||
+                    text.contains("select language") ||
+                    text.contains("enter your mobile") ||
+                    text.contains("enter your phone") ||
+                    text.contains("enter phone number") ||
+                    text.contains("sign up") ||
+                    text.contains("create account") ||
+                    text.contains("register") ||
+                    text.contains("verify your") ||
+                    text.contains("verification code") ||
+                    text.contains("enter otp") ||
+                    text.contains("welcome to pickme")
+
+            if (isSetupScreen) {
+                Log.w(TAG, "PickMe setup/registration screen detected")
+                return@AutomationStep StepResult.Failure(
+                    "PickMe is not set up. Please open PickMe, complete the registration, and try again."
+                )
+            }
+
+            StepResult.Skip("App setup OK")
+        }
+    )
+
+    /**
+     * Detects if PickMe is showing the "rides is currently not available" screen.
+     * If detected, force-closes the app and relaunches it. This transient error
+     * typically resolves on relaunch.
+     */
+    private fun handleRidesUnavailable(context: Context) = AutomationStep(
+        name = "Check rides availability",
+        waitCondition = { root ->
+            root.packageName?.toString() == PACKAGE
+        },
+        timeoutMs = 5_000,
+        delayAfterMs = 2000,
+        maxRetries = 2,
+        action = { _, _ ->
+            val service = AutomataAccessibilityService.instance.value
+                ?: return@AutomationStep StepResult.Skip("No accessibility service")
+
+            val ocr = ScreenReader.captureAndRead(service)
+            if (ocr == null) {
+                return@AutomationStep StepResult.Skip("Could not capture screen")
+            }
+
+            val text = ocr.fullText.lowercase()
+            SecureLog.verbose(TAG, "Rides availability check OCR: ${ocr.fullText.take(300)}")
+
+            val isUnavailable = text.contains("rides") && text.contains("not available") ||
+                    text.contains("currently unavailable") ||
+                    text.contains("service is not available") ||
+                    text.contains("service unavailable")
+
+            if (isUnavailable) {
+                Log.w(TAG, "PickMe showing 'rides not available' — force-closing and relaunching")
+                AutomationEngine.forceCloseApp(context, PACKAGE)
+                kotlinx.coroutines.delay(1500)
+                AutomationEngine.launchApp(context, PACKAGE)
+                kotlinx.coroutines.delay(2000)
+                return@AutomationStep StepResult.Retry("Rides not available, relaunched app")
+            }
+
+            StepResult.Skip("Rides available")
+        }
+    )
+
+    /**
      * Check if PickMe shows a location error (e.g., "location update failed").
      * If location is off, open Settings, toggle it on, then relaunch PickMe.
      */
@@ -209,7 +301,7 @@ object PickMeScript {
                 return@AutomationStep StepResult.Skip("Could not capture screen")
             }
 
-            Log.i(TAG, "Location check OCR: ${ocr.fullText.take(300)}")
+            SecureLog.verbose(TAG, "Location check OCR: ${ocr.fullText.take(300)}")
 
             // Check for location error messages
             val hasLocationError = ocr.fullText.contains("location update failed", true) ||
@@ -256,7 +348,7 @@ object PickMeScript {
                     // OCR fallback: find "Off" text and tap it, or find the toggle area
                     val settingsOcr = ScreenReader.captureAndRead(service)
                     if (settingsOcr != null) {
-                        Log.i(TAG, "Location settings OCR: ${settingsOcr.fullText.take(300)}")
+                        SecureLog.verbose(TAG, "Location settings OCR: ${settingsOcr.fullText.take(300)}")
 
                         // Look for "Off" or "Use location" toggle area
                         val offBlocks = ScreenReader.findTextBlocks(settingsOcr, "Off")
@@ -333,6 +425,43 @@ object PickMeScript {
             val ocr = ScreenReader.captureAndRead(service)
             var tapY = 1163f
             if (ocr != null) {
+                // Handle PickMe's in-app "location update failed" popup
+                // This popup has "Cancel" and "Setting" buttons and covers the search bar
+                val text = ocr.fullText.lowercase()
+                if (text.contains("location update failed") || text.contains("location") && text.contains("setting")) {
+                    val settingBlock = ScreenReader.findTextBlocks(ocr, "Setting")
+                        .firstOrNull()
+                    if (settingBlock?.bounds != null) {
+                        val b = settingBlock.bounds!!
+                        Log.i(TAG, "Location popup detected, tapping 'Setting' at (${b.centerX()}, ${b.centerY()})")
+                        ActionExecutor.tapAtCoordinates(service, b.centerX().toFloat(), b.centerY().toFloat())
+                        kotlinx.coroutines.delay(2000)
+
+                        // Now in Android location settings — find and tap the toggle
+                        val settingsRoot = service.getRootNode()
+                        if (settingsRoot != null) {
+                            val toggleNode = NodeFinder.findAllNodesRecursive(settingsRoot) { node ->
+                                node.className?.toString()?.contains("Switch") == true ||
+                                node.className?.toString()?.contains("Toggle") == true
+                            }.firstOrNull()
+                            if (toggleNode != null && !toggleNode.isChecked) {
+                                ActionExecutor.click(toggleNode)
+                                Log.i(TAG, "Toggled location ON from search bar step")
+                                kotlinx.coroutines.delay(1500)
+                            }
+                        }
+
+                        // Return to PickMe
+                        ActionExecutor.pressBack(service)
+                        kotlinx.coroutines.delay(500)
+                        ActionExecutor.pressBack(service)
+                        kotlinx.coroutines.delay(500)
+                        AutomationEngine.launchApp(service, PACKAGE)
+                        kotlinx.coroutines.delay(3000)
+                        return@AutomationStep StepResult.Retry("Enabled location from popup, retrying")
+                    }
+                }
+
                 // Check if we're already on the PICKUP/DROP screen
                 if (ocr.fullText.contains("PICKUP", ignoreCase = false) &&
                     ocr.fullText.contains("DROP", ignoreCase = false)) {
@@ -411,11 +540,11 @@ object PickMeScript {
             val pickupField = allEditFields.firstOrNull()
             if (pickupField != null) {
                 val fieldText = pickupField.text?.toString() ?: ""
-                Log.i(TAG, "Pickup field text: '$fieldText'")
+                SecureLog.verbose(TAG, "Pickup field text: '$fieldText'")
                 pickupField.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_FOCUS)
                 ActionExecutor.clearText(pickupField)
                 if (ActionExecutor.setText(pickupField, pickupAddress)) {
-                    Log.i(TAG, "Pickup address set: $pickupAddress")
+                    SecureLog.verbose(TAG, "Pickup address set: $pickupAddress")
                     // Poll for search suggestions instead of fixed delay
                     val pollStart = System.currentTimeMillis()
                     val skipTexts = setOf("PICKUP", "DROP", "Saved", "Set location",
@@ -463,7 +592,7 @@ object PickMeScript {
 
             val ocr = ScreenReader.captureAndRead(service)
             if (ocr != null) {
-                Log.i(TAG, "Pickup search results OCR: ${ocr.fullText.take(400)}")
+                SecureLog.verbose(TAG, "Pickup search results OCR: ${ocr.fullText.take(400)}")
 
                 val skipTexts = setOf("PICKUP", "DROP", "Saved", "Set location",
                     "Book for", "One way", "Return trip", "Skip", "Done", "GIF",
@@ -486,7 +615,7 @@ object PickMeScript {
                         val match = resultCandidates.find { it.text.contains(word, ignoreCase = true) }
                         if (match?.bounds != null) {
                             val b = match.bounds!!
-                            Log.i(TAG, "Tapping pickup result matching '$word': '${match.text}' at (${screenCenterX(service)}, ${b.centerY()})")
+                            SecureLog.verbose(TAG, "Tapping pickup result matching '$word': '${match.text}' at (${screenCenterX(service)}, ${b.centerY()})")
                             ActionExecutor.tapAtCoordinates(service, screenCenterX(service), b.centerY().toFloat())
                             return@AutomationStep StepResult.Success
                         }
@@ -497,7 +626,7 @@ object PickMeScript {
                 val firstResult = resultCandidates.firstOrNull()
                 if (firstResult?.bounds != null) {
                     val b = firstResult.bounds!!
-                    Log.i(TAG, "Tapping first pickup result (plusCode=$isPlusCodePickup): '${firstResult.text}' at (${screenCenterX(service)}, ${b.centerY()})")
+                    SecureLog.verbose(TAG, "Tapping first pickup result (plusCode=$isPlusCodePickup): '${firstResult.text}' at (${screenCenterX(service)}, ${b.centerY()})")
                     ActionExecutor.tapAtCoordinates(service, screenCenterX(service), b.centerY().toFloat())
                     return@AutomationStep StepResult.Success
                 }
@@ -528,7 +657,7 @@ object PickMeScript {
             // First, find and tap the DROP field via OCR
             val ocr = ScreenReader.captureAndRead(service)
             if (ocr != null) {
-                Log.i(TAG, "PICKUP/DROP screen: ${ocr.fullText.take(300)}")
+                SecureLog.verbose(TAG, "PICKUP/DROP screen: ${ocr.fullText.take(300)}")
 
                 // Find "DROP" text or "Where are you going?" text on this screen
                 val dropBlocks = ScreenReader.findTextBlocks(ocr, "DROP")
@@ -627,7 +756,7 @@ object PickMeScript {
             // (accessibility clicks don't work reliably in Flutter)
             val ocr = ScreenReader.captureAndRead(service)
             if (ocr != null) {
-                Log.i(TAG, "Search results OCR: ${ocr.fullText.take(400)}")
+                SecureLog.verbose(TAG, "Search results OCR: ${ocr.fullText.take(400)}")
 
                 // Filter to blocks in the results area (below DROP field, above keyboard)
                 // Skip UI elements like PICKUP, DROP, Saved, Set location, keyboard keys, etc.
@@ -653,7 +782,7 @@ object PickMeScript {
                         val match = resultCandidates.find { it.text.contains(word, ignoreCase = true) }
                         if (match?.bounds != null) {
                             val b = match.bounds!!
-                            Log.i(TAG, "Tapping result matching '$word': '${match.text}' at (${screenCenterX(service)}, ${b.centerY()})")
+                            SecureLog.verbose(TAG, "Tapping result matching '$word': '${match.text}' at (${screenCenterX(service)}, ${b.centerY()})")
                             ActionExecutor.tapAtCoordinates(service, screenCenterX(service), b.centerY().toFloat())
                             return@AutomationStep StepResult.Success
                         }
@@ -664,7 +793,7 @@ object PickMeScript {
                 val firstResult = resultCandidates.firstOrNull()
                 if (firstResult?.bounds != null) {
                     val b = firstResult.bounds!!
-                    Log.i(TAG, "Tapping first result (plusCode=$isPlusCodeDest): '${firstResult.text}' at (${screenCenterX(service)}, ${b.centerY()})")
+                    SecureLog.verbose(TAG, "Tapping first result (plusCode=$isPlusCodeDest): '${firstResult.text}' at (${screenCenterX(service)}, ${b.centerY()})")
                     ActionExecutor.tapAtCoordinates(service, screenCenterX(service), b.centerY().toFloat())
                     return@AutomationStep StepResult.Success
                 }
@@ -690,7 +819,7 @@ object PickMeScript {
 
             val ocr = ScreenReader.captureAndRead(service)
             if (ocr != null) {
-                Log.i(TAG, "Checking for ride options: ${ocr.fullText.take(400)}")
+                SecureLog.verbose(TAG, "Checking for ride options: ${ocr.fullText.take(400)}")
 
                 val pricePattern = Regex("""(?:Rs\.?|LKR)\s*(\d[\d,.]*)""", RegexOption.IGNORE_CASE)
                 val hasPrice = pricePattern.containsMatchIn(ocr.fullText)
@@ -709,10 +838,10 @@ object PickMeScript {
                     if (ocr2 != null) {
                         val secondPrices = pricePattern.findAll(ocr2.fullText).map { it.groupValues[1] }.toList()
                         if (firstPrices == secondPrices) {
-                            Log.i(TAG, "Ride options stable! Prices match across two reads: $firstPrices")
+                            SecureLog.i(TAG, "Ride options stable! Prices match across two reads: $firstPrices")
                             return@AutomationStep StepResult.Success
                         }
-                        Log.i(TAG, "Prices changed between reads ($firstPrices → $secondPrices), waiting to stabilize")
+                        SecureLog.i(TAG, "Prices changed between reads ($firstPrices → $secondPrices), waiting to stabilize")
                         return@AutomationStep StepResult.Retry("Prices still loading")
                     }
                     // Second read failed, trust first
@@ -758,7 +887,7 @@ object PickMeScript {
                     return@AutomationStep StepResult.Success
                 }
                 Log.i(TAG, "Not on ride options, navigating from home screen...")
-                Log.i(TAG, "Current screen: ${ocr.fullText.take(200)}")
+                SecureLog.verbose(TAG, "Current screen: ${ocr.fullText.take(200)}")
             }
 
             // Step 1: Tap "Where are you going?" search bar
@@ -803,7 +932,7 @@ object PickMeScript {
                 val fields1 = NodeFinder.findAllNodesRecursive(freshRoot1) { it.isEditable }
                 val pickupField = fields1.firstOrNull()
                 if (pickupField != null) {
-                    Log.i(TAG, "Entering pickup: $pickupAddress")
+                    SecureLog.verbose(TAG, "Entering pickup: $pickupAddress")
                     pickupField.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_FOCUS)
                     ActionExecutor.clearText(pickupField)
                     ActionExecutor.setText(pickupField, pickupAddress)
@@ -826,7 +955,7 @@ object PickMeScript {
                         } ?: candidates.firstOrNull()
 
                         if (match?.bounds != null) {
-                            Log.i(TAG, "Selecting pickup result: '${match.text}'")
+                            SecureLog.verbose(TAG, "Selecting pickup result: '${match.text}'")
                             ActionExecutor.tapAtCoordinates(service, screenCenterX(service), match.bounds!!.centerY().toFloat())
                             kotlinx.coroutines.delay(3000)
                         }
@@ -860,7 +989,7 @@ object PickMeScript {
             }
 
             if (dropField != null) {
-                Log.i(TAG, "Entering destination: $destination")
+                SecureLog.verbose(TAG, "Entering destination: $destination")
                 ActionExecutor.clearText(dropField)
                 ActionExecutor.setText(dropField, destination)
                 kotlinx.coroutines.delay(2000)
@@ -872,7 +1001,7 @@ object PickMeScript {
             // Step 4: Select destination result
             val destOcr = ScreenReader.captureAndRead(service)
             if (destOcr != null) {
-                Log.i(TAG, "Destination results: ${destOcr.fullText.take(400)}")
+                SecureLog.verbose(TAG, "Destination results: ${destOcr.fullText.take(400)}")
                 val destWords = destination.split(" ").filter { it.length > 2 }
                 val skipTexts = setOf("PICKUP", "DROP", "Saved", "Set location",
                     "Book for", "One way", "Return trip", "Your Location", "Where are you going")
@@ -887,7 +1016,7 @@ object PickMeScript {
                 } ?: candidates.firstOrNull()
 
                 if (match?.bounds != null) {
-                    Log.i(TAG, "Selecting destination result: '${match.text}'")
+                    SecureLog.verbose(TAG, "Selecting destination result: '${match.text}'")
                     ActionExecutor.tapAtCoordinates(service, screenCenterX(service), match.bounds!!.centerY().toFloat())
                 } else {
                     Log.w(TAG, "No destination results found")
@@ -909,7 +1038,7 @@ object PickMeScript {
                     Log.i(TAG, "Ride options loaded after navigation")
                     return@AutomationStep StepResult.Success
                 }
-                Log.i(TAG, "Final screen: ${finalOcr.fullText.take(200)}")
+                SecureLog.verbose(TAG, "Final screen: ${finalOcr.fullText.take(200)}")
             }
 
             StepResult.Retry("Ride options not loaded after navigation")
@@ -936,7 +1065,7 @@ object PickMeScript {
                 return@AutomationStep StepResult.Retry("Failed to capture screenshot")
             }
 
-            Log.i(TAG, "Price reading OCR: ${ocr.fullText}")
+            SecureLog.verbose(TAG, "Price reading OCR: ${ocr.fullText}")
 
             // Find all prices on screen using findAll (handles multiple prices per block)
             val pricePattern = Regex("""(?:Rs\.?|LKR)\s*(\d[\d,.]*)""", RegexOption.IGNORE_CASE)
@@ -956,7 +1085,7 @@ object PickMeScript {
                     val rawPrice = ScreenReader.sanitizePrice(matches[0].groupValues[1])
                     val price = normalizePrice(rawPrice)
                     allPrices.add(price to block.bounds)
-                    Log.i(TAG, "Found price: Rs $price at ${block.bounds} (raw: '${block.text}')")
+                    SecureLog.i(TAG, "Found price: Rs $price at ${block.bounds} (raw: '${block.text}')")
                 } else if (matches.size > 1 && block.bounds != null) {
                     // Multiple prices in one block — estimate X position for each
                     // based on character offset within the block text
@@ -969,7 +1098,7 @@ object PickMeScript {
                         val estimatedX = b.left + (charPos.toFloat() / textLen * b.width()).toInt()
                         val estimatedBounds = Rect(estimatedX - 30, b.top, estimatedX + 30, b.bottom)
                         allPrices.add(price to estimatedBounds)
-                        Log.i(TAG, "Found price: Rs $price at estimated X=$estimatedX (raw: '${block.text}', charPos=$charPos)")
+                        SecureLog.i(TAG, "Found price: Rs $price at estimated X=$estimatedX (raw: '${block.text}', charPos=$charPos)")
                     }
                 }
             }
@@ -980,20 +1109,30 @@ object PickMeScript {
                     val rawPrice = ScreenReader.sanitizePrice(m.groupValues[1])
                     val price = normalizePrice(rawPrice)
                     allPrices.add(price to null)
-                    Log.i(TAG, "Found price in full text: Rs $price")
+                    SecureLog.i(TAG, "Found price in full text: Rs $price")
                 }
             }
 
             if (allPrices.isNotEmpty()) {
-                // Find all ride type labels and their positions
+                // Find all ride type labels and their positions.
+                // Use word-boundary matching to avoid substring false positives
+                // (e.g., "Bike" matching inside "Motorbike" or merged "Tuk Bike" block).
                 val rideTypeLabels = listOf("Tuk", "Bike", "Flex", "Car", "Mini", "Nano")
+                val wordBoundaryRegex = { word: String -> Regex("""\b${Regex.escape(word)}\b""", RegexOption.IGNORE_CASE) }
                 val rideTypePositions = mutableListOf<Triple<String, Int, Int>>() // name, centerX, centerY
                 for (rt in rideTypeLabels) {
-                    val blocks = ScreenReader.findTextBlocks(ocr, rt)
-                    if (blocks.isNotEmpty() && blocks.first().bounds != null) {
-                        val b = blocks.first().bounds!!
+                    val regex = wordBoundaryRegex(rt)
+                    // Find blocks where the ride type appears as a standalone word
+                    val matchingBlocks = ocr.blocks.filter { block ->
+                        regex.containsMatchIn(block.text) && block.bounds != null
+                    }
+                    if (matchingBlocks.isNotEmpty()) {
+                        // Prefer the block where the text most closely matches just the label
+                        // (shortest block text = most precise position)
+                        val best = matchingBlocks.minByOrNull { it.text.length }!!
+                        val b = best.bounds!!
                         rideTypePositions.add(Triple(rt, b.centerX(), b.centerY()))
-                        Log.i(TAG, "Ride type '$rt' at X=${b.centerX()}, Y=${b.centerY()}")
+                        SecureLog.verbose(TAG, "Ride type '$rt' at X=${b.centerX()}, Y=${b.centerY()} (block: '${best.text}')")
                     }
                 }
 
@@ -1003,17 +1142,19 @@ object PickMeScript {
                 // Log all prices with positions for debugging
                 for ((p, bounds) in allPrices) {
                     if (bounds != null) {
-                        Log.i(TAG, "Price Rs $p at X=${bounds.centerX()}, Y=${bounds.centerY()}")
+                        SecureLog.i(TAG, "Price Rs $p at X=${bounds.centerX()}, Y=${bounds.centerY()}")
                     }
                 }
 
-                // Strategy: X-proximity matching
-                // PickMe layout has prices BELOW their ride type labels, aligned by X.
-                // Find the price whose X is closest to the target ride type label's X.
+                // Strategy: Combined X+Y proximity matching.
+                // PickMe layout has prices BELOW their ride type labels, roughly aligned by X.
+                // Use weighted distance (X weight=1.0, Y weight=0.5) to find the closest price.
+                // Also enforce a max X-distance threshold to avoid matching a completely wrong column.
+                val MAX_X_DISTANCE = 200
                 val price = if (targetLabel != null) {
                     val targetX = targetLabel.second
                     val targetY = targetLabel.third
-                    Log.i(TAG, "Matching price for '$rideType' at X=$targetX, Y=$targetY")
+                    SecureLog.i(TAG, "Matching price for '$rideType' at X=$targetX, Y=$targetY")
 
                     // Only consider prices that are BELOW the label (Y > label Y)
                     val pricesBelow = allPrices.filter { (_, bounds) ->
@@ -1021,13 +1162,34 @@ object PickMeScript {
                     }
                     val candidates = pricesBelow.ifEmpty { allPrices.filter { it.second != null } }
 
-                    val matched = candidates.minByOrNull { (_, bounds) ->
-                        if (bounds != null) kotlin.math.abs(bounds.centerX() - targetX) else Int.MAX_VALUE
+                    // Log distances for all candidates
+                    for ((p, bounds) in candidates) {
+                        if (bounds != null) {
+                            val dx = kotlin.math.abs(bounds.centerX() - targetX)
+                            val dy = kotlin.math.abs(bounds.centerY() - targetY)
+                            SecureLog.i(TAG, "  Candidate Rs $p: dx=$dx, dy=$dy, score=${dx + dy * 0.5}")
+                        }
                     }
+
+                    val matched = candidates
+                        .filter { (_, bounds) ->
+                            bounds != null && kotlin.math.abs(bounds.centerX() - targetX) <= MAX_X_DISTANCE
+                        }
+                        .minByOrNull { (_, bounds) ->
+                            if (bounds != null) {
+                                val dx = kotlin.math.abs(bounds.centerX() - targetX)
+                                val dy = kotlin.math.abs(bounds.centerY() - targetY)
+                                dx + (dy * 0.5).toInt()
+                            } else Int.MAX_VALUE
+                        }
                     if (matched != null) {
-                        Log.i(TAG, "X-proximity match: Rs ${matched.first} at X=${matched.second?.centerX()} (dx=${matched.second?.let { kotlin.math.abs(it.centerX() - targetX) }})")
+                        val dx = matched.second?.let { kotlin.math.abs(it.centerX() - targetX) }
+                        SecureLog.i(TAG, "Proximity match: Rs ${matched.first} at X=${matched.second?.centerX()} (dx=$dx)")
+                    } else {
+                        Log.w(TAG, "No price within ${MAX_X_DISTANCE}px of '$rideType' label, retrying")
+                        return@AutomationStep StepResult.Retry("Price too far from ride type label")
                     }
-                    matched?.first ?: allPrices.first().first
+                    matched.first
                 } else {
                     Log.w(TAG, "Ride type '$rideType' NOT found in OCR labels, using first price")
                     allPrices.first().first
@@ -1042,7 +1204,7 @@ object PickMeScript {
                         val minutes = etaMatch.groupValues[1].toIntOrNull()
                         if (minutes != null) {
                             allEtas.add(minutes to block.bounds)
-                            Log.i(TAG, "Found ETA: ${minutes} min at ${block.bounds} (raw: '${block.text}')")
+                            SecureLog.i(TAG, "Found ETA: ${minutes} min at ${block.bounds} (raw: '${block.text}')")
                         }
                     }
                 }
@@ -1059,7 +1221,7 @@ object PickMeScript {
                     }?.first
                     if (eta != null) {
                         stepContext.collectedData["pickme_eta"] = eta.toString()
-                        Log.i(TAG, "PickMe ETA for $rideType: $eta min (X-proximity)")
+                        SecureLog.i(TAG, "PickMe ETA for $rideType: $eta min (X-proximity)")
                     }
                 }
 
@@ -1085,18 +1247,26 @@ object PickMeScript {
                             bounds != null && bounds.centerY() > targetY2
                         }
                         val candidates2 = pricesBelow2.ifEmpty { secondPrices.filter { it.second != null } }
-                        val matched2 = candidates2.minByOrNull { (_, bounds) ->
-                            if (bounds != null) kotlin.math.abs(bounds.centerX() - targetX2) else Int.MAX_VALUE
-                        }
+                        val matched2 = candidates2
+                            .filter { (_, bounds) ->
+                                bounds != null && kotlin.math.abs(bounds.centerX() - targetX2) <= MAX_X_DISTANCE
+                            }
+                            .minByOrNull { (_, bounds) ->
+                                if (bounds != null) {
+                                    val dx = kotlin.math.abs(bounds.centerX() - targetX2)
+                                    val dy = kotlin.math.abs(bounds.centerY() - targetY2)
+                                    dx + (dy * 0.5).toInt()
+                                } else Int.MAX_VALUE
+                            }
                         if (matched2 != null && matched2.first != price) {
-                            Log.w(TAG, "Price changed between reads: $price → ${matched2.first}, retrying")
+                            SecureLog.w(TAG, "Price changed between reads: $price → ${matched2.first}, retrying")
                             return@AutomationStep StepResult.Retry("Price unstable")
                         }
-                        Log.i(TAG, "Price confirmed stable: Rs $price")
+                        SecureLog.i(TAG, "Price confirmed stable: Rs $price")
                     }
                 }
 
-                Log.i(TAG, "PickMe price for $rideType: Rs $price")
+                SecureLog.i(TAG, "PickMe price for $rideType: Rs $price")
                 StepResult.SuccessWithData("pickme_price", price)
             } else {
                 Log.w(TAG, "No prices found in OCR")
@@ -1108,32 +1278,53 @@ object PickMeScript {
     /**
      * Tap the ride type label (Tuk, Bike, Flex) on the ride options panel.
      */
-    private fun selectRideType(rideType: String) = AutomationStep(
-        name = "Select ride type: $rideType",
-        waitCondition = { root ->
-            root.packageName?.toString() == PACKAGE
-        },
-        timeoutMs = 10_000,
-        delayAfterMs = 1500,
-        maxRetries = 3,
-        action = { _, _ ->
-            val service = AutomataAccessibilityService.instance.value
-                ?: return@AutomationStep StepResult.Failure("No accessibility service")
+    private fun selectRideType(rideType: String): AutomationStep {
+        var attempt = 0
+        return AutomationStep(
+            name = "Select ride type: $rideType",
+            waitCondition = { root ->
+                root.packageName?.toString() == PACKAGE
+            },
+            timeoutMs = 10_000,
+            delayAfterMs = 1500,
+            maxRetries = 3,
+            action = { _, _ ->
+                val service = AutomataAccessibilityService.instance.value
+                    ?: return@AutomationStep StepResult.Failure("No accessibility service")
 
-            val ocr = ScreenReader.captureAndRead(service)
-            if (ocr != null) {
-                val rideBlocks = ScreenReader.findTextBlocks(ocr, rideType)
-                if (rideBlocks.isNotEmpty() && rideBlocks.first().bounds != null) {
-                    val b = rideBlocks.first().bounds!!
-                    Log.i(TAG, "Tapping ride type '$rideType' at (${b.centerX()}, ${b.centerY()})")
-                    ActionExecutor.tapAtCoordinates(service, b.centerX().toFloat(), b.centerY().toFloat())
-                    return@AutomationStep StepResult.Success
+                // On retries, swipe the ride options panel left to reveal hidden options
+                if (attempt > 0) {
+                    val metrics = service.resources.displayMetrics
+                    val screenW = metrics.widthPixels.toFloat()
+                    val screenH = metrics.heightPixels.toFloat()
+                    // Ride type labels are roughly at 62% of screen height
+                    val swipeY = screenH * 0.62f
+                    Log.i(TAG, "Swiping ride panel left-to-start (attempt $attempt)")
+                    ActionExecutor.swipe(
+                        service,
+                        startX = screenW * 0.2f, startY = swipeY,
+                        endX = screenW * 0.8f, endY = swipeY,
+                        durationMs = 400
+                    )
+                    kotlinx.coroutines.delay(500)
                 }
-            }
+                attempt++
 
-            StepResult.Retry("Could not find ride type '$rideType'")
-        }
-    )
+                val ocr = ScreenReader.captureAndRead(service)
+                if (ocr != null) {
+                    val rideBlocks = ScreenReader.findTextBlocks(ocr, rideType)
+                    if (rideBlocks.isNotEmpty() && rideBlocks.first().bounds != null) {
+                        val b = rideBlocks.first().bounds!!
+                        Log.i(TAG, "Tapping ride type '$rideType' at (${b.centerX()}, ${b.centerY()})")
+                        ActionExecutor.tapAtCoordinates(service, b.centerX().toFloat(), b.centerY().toFloat())
+                        return@AutomationStep StepResult.Success
+                    }
+                }
+
+                StepResult.Retry("Could not find ride type '$rideType'")
+            }
+        )
+    }
 
     /**
      * Tap the "Book Now" button on the ride options panel.
@@ -1206,7 +1397,7 @@ object PickMeScript {
             // NOT "Confirm your pickup" (title text)
             val ocr = ScreenReader.captureAndRead(service)
             if (ocr != null) {
-                Log.i(TAG, "Confirm screen OCR: ${ocr.fullText.take(300)}")
+                SecureLog.verbose(TAG, "Confirm screen OCR: ${ocr.fullText.take(300)}")
 
                 // Prefer the all-caps "CONFIRM PICKUP" button (bottommost match)
                 val blocks = ScreenReader.findTextBlocks(ocr, "CONFIRM PICKUP")

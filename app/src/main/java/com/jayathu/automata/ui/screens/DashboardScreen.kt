@@ -1,6 +1,10 @@
 package com.jayathu.automata.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -13,6 +17,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.DirectionsBike
 import androidx.compose.material.icons.filled.Add
@@ -33,6 +38,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Text
@@ -40,6 +47,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -61,6 +69,8 @@ fun DashboardScreen(
     dumpCountdown: Int,
     debugMode: Boolean = false,
     showRunWarning: Boolean = true,
+    highlightTaskId: Long? = null,
+    onHighlightConsumed: () -> Unit = {},
     onDismissRunWarning: () -> Unit = {},
     onAddTask: () -> Unit,
     onEditTask: (Long) -> Unit,
@@ -73,6 +83,20 @@ fun DashboardScreen(
 ) {
     var pendingConfig by remember { mutableStateOf<TaskConfig?>(null) }
     var dontShowAgain by remember { mutableStateOf(false) }
+    val listState = rememberLazyListState()
+    val snackbarHostState = remember { SnackbarHostState() }
+    var highlightedId by remember { mutableStateOf<Long?>(null) }
+
+    LaunchedEffect(highlightTaskId) {
+        if (highlightTaskId != null) {
+            highlightedId = highlightTaskId
+            listState.animateScrollToItem(0)
+            snackbarHostState.showSnackbar("Task created")
+            kotlinx.coroutines.delay(5000)
+            highlightedId = null
+            onHighlightConsumed()
+        }
+    }
 
     if (pendingConfig != null) {
         AlertDialog(
@@ -140,6 +164,7 @@ fun DashboardScreen(
                 }
             )
         },
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         floatingActionButton = {
             if (!automationState.isRunning) {
                 FloatingActionButton(onClick = onAddTask) {
@@ -311,6 +336,7 @@ fun DashboardScreen(
                 }
             } else {
                 LazyColumn(
+                    state = listState,
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(horizontal = 16.dp, vertical = 8.dp),
@@ -320,6 +346,7 @@ fun DashboardScreen(
                         TaskCard(
                             config = config,
                             isRunning = automationState.isRunning,
+                            highlighted = config.id == highlightedId,
                             onEdit = { onEditTask(config.id) },
                             onGo = {
                                 if (showRunWarning) {
@@ -411,12 +438,26 @@ private data class ResultInfo(
 private fun TaskCard(
     config: TaskConfig,
     isRunning: Boolean,
+    highlighted: Boolean = false,
     onEdit: () -> Unit,
     onGo: () -> Unit
 ) {
+    val borderWidth by animateDpAsState(
+        targetValue = if (highlighted) 2.dp else 0.dp,
+        animationSpec = tween(durationMillis = if (highlighted) 300 else 500),
+        label = "cardBorder"
+    )
+    val borderColor = MaterialTheme.colorScheme.primary
+
     Card(
         onClick = onEdit,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(
+                if (borderWidth > 0.dp)
+                    Modifier.border(borderWidth, borderColor, RoundedCornerShape(12.dp))
+                else Modifier
+            ),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Row(

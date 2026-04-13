@@ -517,11 +517,11 @@ private fun GoogleMapView(
             WebView(ctx).apply {
                 settings.javaScriptEnabled = true
                 settings.domStorageEnabled = true
-                settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                settings.allowContentAccess = true
-                settings.allowFileAccess = true
-                settings.allowFileAccessFromFileURLs = true
-                settings.allowUniversalAccessFromFileURLs = true
+                settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                settings.allowContentAccess = false
+                settings.allowFileAccess = false
+                settings.allowFileAccessFromFileURLs = false
+                settings.allowUniversalAccessFromFileURLs = false
 
                 addJavascriptInterface(object {
                     @JavascriptInterface
@@ -577,9 +577,7 @@ private fun GoogleMapView(
                 }
 
                 val html = buildGoogleMapsHtml(apiKey, DEFAULT_LAT, DEFAULT_LNG, DEFAULT_ZOOM)
-                val htmlFile = java.io.File(ctx.cacheDir, "google_map.html")
-                htmlFile.writeText(html)
-                loadUrl("file://${htmlFile.absolutePath}")
+                loadDataWithBaseURL("https://maps.googleapis.com", html, "text/html", "UTF-8", null)
 
                 webView = this
             }

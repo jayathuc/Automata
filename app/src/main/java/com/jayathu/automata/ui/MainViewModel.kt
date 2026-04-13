@@ -28,6 +28,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -88,6 +89,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val googleMapsApiKey: StateFlow<String> = _googleMapsApiKey.asStateFlow()
 
     private var controlOverlay: AutomationControlOverlay? = null
+    @Volatile private var isAborting = false
 
     fun setAutoEnableLocation(enabled: Boolean) {
         preferencesManager.autoEnableLocation = enabled
@@ -175,14 +177,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _mapProvider.value = preferencesManager.mapProvider
         _googleMapsApiKey.value = preferencesManager.googleMapsApiKey
 
-        // Observe accessibility service state changes for notification updates
+        // Observe accessibility service state changes for notification updates.
+        // Using collectLatest ensures the inner collector is cancelled when the
+        // service value changes (e.g., service disconnects/reconnects), preventing
+        // orphaned collectors that leave stale notifications.
         viewModelScope.launch {
-            AutomataAccessibilityService.instance.collect { service ->
+            AutomataAccessibilityService.instance.collectLatest { service ->
                 _automationState.value = _automationState.value.copy(
                     accessibilityEnabled = service != null
                 )
-                service?.getEngine()?.state?.collect { engineState ->
-                    notificationManager.updateFromState(engineState)
+                if (service == null) {
+                    // Service disconnected — dismiss any lingering progress notification
+                    notificationManager.updateFromState(AutomationState.Idle)
+                    return@collectLatest
+                }
+                service.getEngine()?.state?.collect { engineState ->
+                    // Skip notification updates after abort to prevent trailing
+                    // engine emissions from overwriting the abort notification
+                    if (!isAborting) {
+                        notificationManager.updateFromState(engineState)
+                    }
                     _automationState.value = _automationState.value.copy(
                         currentStep = when (engineState) {
                             is AutomationState.Running -> engineState.stepName
@@ -204,6 +218,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             Log.w(TAG, "Automation already running")
             return
         }
+        isAborting = false
 
         val service = AutomataAccessibilityService.instance.value
         if (service == null) {
@@ -296,8 +311,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         engine.runAutomation(steps) { result ->
             Log.i(TAG, "Automation result: $result")
+            isAborting = false
             control.dismiss()
             controlOverlay = null
+            // Ensure progress notification is dismissed regardless of flow timing
+            notificationManager.updateFromState(AutomationState.Idle)
             _automationState.value = _automationState.value.copy(
                 isRunning = false,
                 result = result
@@ -307,9 +325,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun abortAutomation() {
         val service = AutomataAccessibilityService.instance.value ?: return
+        isAborting = true
         service.getEngine()?.abort()
         controlOverlay?.dismiss()
         controlOverlay = null
+        // Explicitly dismiss the progress notification — don't rely on the
+        // engine state flow to emit a terminal state in time.
+        notificationManager.updateFromState(AutomationState.Aborted)
         _automationState.value = _automationState.value.copy(
             isRunning = false,
             result = AutomationResult.Aborted
@@ -380,6 +402,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } else {
                 repository.updateTaskConfig(config)
             }
+        }
+    }
+
+    suspend fun saveTaskConfigAndGetId(config: TaskConfig): Long {
+        return if (config.id == 0L) {
+            repository.saveTaskConfig(config)
+        } else {
+            repository.updateTaskConfig(config)
+            config.id
         }
     }
 

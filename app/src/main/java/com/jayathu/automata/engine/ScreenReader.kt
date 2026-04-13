@@ -85,7 +85,7 @@ object ScreenReader {
                             )
                         }
                     }
-                    Log.d(TAG, "OCR found ${blocks.size} text lines: ${visionText.text.take(200)}")
+                    SecureLog.verbose(TAG, "OCR found ${blocks.size} text lines: ${visionText.text.take(200)}")
                     if (continuation.isActive) {
                         continuation.resume(OcrResult(visionText.text, blocks))
                     }
@@ -151,7 +151,7 @@ object ScreenReader {
             val match = pricePattern.find(block.text)
             if (match != null) {
                 val price = sanitizePrice(match.groupValues[1])
-                Log.i(TAG, "Price found: $price from raw '${match.groupValues[1]}' in text '${block.text}'")
+                SecureLog.i(TAG, "Price found: $price from raw '${match.groupValues[1]}' in text '${block.text}'")
                 return price
             }
         }
@@ -160,11 +160,11 @@ object ScreenReader {
         val fullMatch = pricePattern.find(ocrResult.fullText)
         if (fullMatch != null) {
             val price = sanitizePrice(fullMatch.groupValues[1])
-            Log.i(TAG, "Price found in full text: $price from raw '${fullMatch.groupValues[1]}'")
+            SecureLog.i(TAG, "Price found in full text: $price from raw '${fullMatch.groupValues[1]}'")
             return price
         }
 
-        Log.w(TAG, "No price found in OCR text: ${ocrResult.fullText.take(300)}")
+        SecureLog.w(TAG, "No price found in OCR text: ${ocrResult.fullText.take(300)}")
         return null
     }
 
@@ -204,7 +204,7 @@ object ScreenReader {
         val beforeLastDot = s.substring(0, lastDotIndex).replace(".", "")
         val afterLastDot = s.substring(lastDotIndex) // includes the dot
         val fixed = beforeLastDot + afterLastDot
-        Log.i(TAG, "sanitizePrice: '$raw' → '$fixed' (fixed ${dotCount - 1} misread comma(s))")
+        SecureLog.i(TAG, "sanitizePrice: '$raw' → '$fixed' (fixed ${dotCount - 1} misread comma(s))")
         return fixed
     }
 

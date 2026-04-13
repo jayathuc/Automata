@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Rect
 import android.util.Log
 import com.jayathu.automata.engine.ActionExecutor
+import com.jayathu.automata.engine.SecureLog
 import com.jayathu.automata.engine.AutomationEngine
 import com.jayathu.automata.engine.AutomationStep
 import com.jayathu.automata.engine.NodeFinder
@@ -82,6 +83,7 @@ object UberScript {
         val steps = mutableListOf(
             verifyAppInstalled(context),
             launchApp(context),
+            checkAppSetupComplete(),
             handleSkipPrompt(),
             tapWhereToField()
         )
@@ -176,7 +178,7 @@ object UberScript {
         // it's likely missing a decimal point. Insert one 2 digits from the end.
         if (value >= 10000 && price.length >= 5) {
             val corrected = price.substring(0, price.length - 2) + "." + price.substring(price.length - 2)
-            Log.i(TAG, "Price normalization: '$price' → '$corrected' (likely dropped decimal)")
+            SecureLog.i(TAG, "Price normalization: '$price' → '$corrected' (likely dropped decimal)")
             return corrected
         }
 
@@ -265,12 +267,12 @@ object UberScript {
             }
 
             if (hasCorrectDest) {
-                Log.i(TAG, "Destination verified after resume: found destination words in '$topText'")
+                SecureLog.verbose(TAG, "Destination verified after resume: found destination words in '$topText'")
                 return@AutomationStep StepResult.Success
             }
 
             // Wrong destination — Uber swapped it (e.g. to "Home")
-            Log.w(TAG, "Wrong destination after resume! Route shows: '$topText', expected words from: '$destination'")
+            SecureLog.w(TAG, "Wrong destination after resume! Route shows: '$topText', expected words from: '$destination'")
             Log.i(TAG, "Navigating back to fix destination...")
 
             // Tap the route/destination area at the top to go back to search
@@ -317,7 +319,7 @@ object UberScript {
                 activeField.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_FOCUS)
                 ActionExecutor.clearText(activeField)
                 ActionExecutor.setTextWithRetrigger(activeField, destination)
-                Log.i(TAG, "Re-entered destination: $destination")
+                SecureLog.verbose(TAG, "Re-entered destination: $destination")
                 kotlinx.coroutines.delay(1500)
 
                 // Select search result
@@ -387,6 +389,52 @@ object UberScript {
     )
 
     /**
+     * Detects if Uber is showing a first-time setup screen (phone number entry,
+     * registration, permissions) and fails with a clear message.
+     */
+    private fun checkAppSetupComplete() = AutomationStep(
+        name = "Check Uber setup",
+        waitCondition = { root ->
+            root.packageName?.toString() == PACKAGE
+        },
+        timeoutMs = 5_000,
+        action = { _, _ ->
+            val service = AutomataAccessibilityService.instance.value
+                ?: return@AutomationStep StepResult.Skip("No accessibility service")
+
+            val ocr = ScreenReader.captureAndRead(service)
+            if (ocr == null) {
+                return@AutomationStep StepResult.Skip("Could not capture screen")
+            }
+
+            val text = ocr.fullText.lowercase()
+            SecureLog.verbose(TAG, "Setup check OCR: ${ocr.fullText.take(300)}")
+
+            val isSetupScreen = text.contains("enter your mobile number") ||
+                    text.contains("enter your phone number") ||
+                    text.contains("what's your number") ||
+                    text.contains("sign up") ||
+                    text.contains("create your account") ||
+                    text.contains("create account") ||
+                    text.contains("verify your") ||
+                    text.contains("verification code") ||
+                    text.contains("enter the 4-digit") ||
+                    text.contains("enter otp") ||
+                    text.contains("get started with uber") ||
+                    text.contains("welcome to uber")
+
+            if (isSetupScreen) {
+                Log.w(TAG, "Uber setup/registration screen detected")
+                return@AutomationStep StepResult.Failure(
+                    "Uber is not set up. Please open Uber, complete the registration, and try again."
+                )
+            }
+
+            StepResult.Skip("App setup OK")
+        }
+    )
+
+    /**
      * Handle the "ride again with previous driver" prompt if it appears.
      * Tap "Skip" or similar dismiss button. If no prompt, just proceed.
      */
@@ -416,7 +464,7 @@ object UberScript {
             // OCR fallback
             val ocr = ScreenReader.captureAndRead(service)
             if (ocr != null) {
-                Log.i(TAG, "Initial screen OCR: ${ocr.fullText.take(300)}")
+                SecureLog.verbose(TAG, "Initial screen OCR: ${ocr.fullText.take(300)}")
                 val skipBlocks = ScreenReader.findTextBlocks(ocr, "Skip")
                 if (skipBlocks.isNotEmpty() && skipBlocks.first().bounds != null) {
                     val b = skipBlocks.first().bounds!!
@@ -466,7 +514,7 @@ object UberScript {
             // OCR fallback
             val ocr = ScreenReader.captureAndRead(service)
             if (ocr != null) {
-                Log.i(TAG, "Home screen OCR: ${ocr.fullText.take(300)}")
+                SecureLog.verbose(TAG, "Home screen OCR: ${ocr.fullText.take(300)}")
                 val blocks = ScreenReader.findTextBlocks(ocr, "Where to")
                 if (blocks.isNotEmpty() && blocks.first().bounds != null) {
                     val b = blocks.first().bounds!!
@@ -510,7 +558,7 @@ object UberScript {
                 pickupField.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_FOCUS)
                 ActionExecutor.clearText(pickupField)
                 if (ActionExecutor.setTextWithRetrigger(pickupField, pickupAddress)) {
-                    Log.i(TAG, "Pickup address set: $pickupAddress")
+                    SecureLog.verbose(TAG, "Pickup address set: $pickupAddress")
                     // Poll for search suggestions instead of fixed delay
                     val svc = AutomataAccessibilityService.instance.value
                     if (svc != null) {
@@ -653,7 +701,7 @@ object UberScript {
             // OCR approach
             val ocr = stableOcr
             if (ocr != null) {
-                Log.i(TAG, "Pickup search results OCR: ${ocr.fullText.take(500)}")
+                SecureLog.verbose(TAG, "Pickup search results OCR: ${ocr.fullText.take(500)}")
 
                 // Log all blocks for debugging
                 for (block in ocr.blocks) {
@@ -699,7 +747,7 @@ object UberScript {
                 val firstResult = resultCandidates.firstOrNull()
                 if (firstResult?.bounds != null) {
                     val b = firstResult.bounds!!
-                    Log.i(TAG, "Tapping first pickup result: '${firstResult.text}' at (left, ${b.centerY()})")
+                    SecureLog.verbose(TAG, "Tapping first pickup result: '${firstResult.text}' at (left, ${b.centerY()})")
                     ActionExecutor.tapAtCoordinates(service, leftTapX, b.centerY().toFloat())
                     return@AutomationStep StepResult.Success
                 }
@@ -753,7 +801,7 @@ object UberScript {
                     // Wrong destination on ride options — tap the route/destination area
                     // at the top to edit it. This preserves the pickup and only changes
                     // the destination. Do NOT press Back — that resets both fields.
-                    Log.i(TAG, "On ride options with wrong destination — tapping route area to edit for '$destination'")
+                    SecureLog.verbose(TAG, "On ride options with wrong destination — tapping route area to edit for '$destination'")
 
                     val routeBlocks = checkOcr.blocks.filter { block ->
                         val top = block.bounds?.top ?: 0
@@ -763,7 +811,7 @@ object UberScript {
                     val routeBlock = routeBlocks.lastOrNull { it.bounds != null }
                     if (routeBlock?.bounds != null) {
                         val b = routeBlock.bounds!!
-                        Log.i(TAG, "Tapping destination in route area: '${routeBlock.text}' at (${b.centerX()}, ${b.centerY()})")
+                        SecureLog.verbose(TAG, "Tapping destination in route area: '${routeBlock.text}' at (${b.centerX()}, ${b.centerY()})")
                         ActionExecutor.tapAtCoordinates(service, b.centerX().toFloat(), b.centerY().toFloat())
                     } else {
                         // Fallback: tap the route area where destination typically appears
@@ -843,7 +891,7 @@ object UberScript {
                 activeField.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_FOCUS)
                 ActionExecutor.clearText(activeField)
                 if (ActionExecutor.setTextWithRetrigger(activeField, destination)) {
-                    Log.i(TAG, "Destination text set: $destination")
+                    SecureLog.verbose(TAG, "Destination text set: $destination")
                     stepContext.collectedData["uber_dest_typed"] = "true"
                     // Poll for search suggestions instead of fixed delay
                     val pollStart = System.currentTimeMillis()
@@ -1020,7 +1068,7 @@ object UberScript {
             // OCR approach — tap the search result by coordinates.
             val ocr = stableOcr
             if (ocr != null) {
-                Log.i(TAG, "Search results OCR: ${ocr.fullText.take(500)}")
+                SecureLog.verbose(TAG, "Search results OCR: ${ocr.fullText.take(500)}")
 
                 // Log all blocks with bounds for debugging
                 for (block in ocr.blocks) {
@@ -1106,7 +1154,7 @@ object UberScript {
 
             val ocr = ScreenReader.captureAndRead(service)
             if (ocr != null) {
-                Log.i(TAG, "Checking for ride options: ${ocr.fullText.take(400)}")
+                SecureLog.verbose(TAG, "Checking for ride options: ${ocr.fullText.take(400)}")
 
                 val pricePattern = Regex("""(?:LKR|[Rr]s\.?)\s*(\d[\d,.]*)""", RegexOption.IGNORE_CASE)
                 val hasPrice = pricePattern.containsMatchIn(ocr.fullText)
@@ -1159,7 +1207,7 @@ object UberScript {
             // then grab the price on the same row (closest Y-center).
             val ocr = ScreenReader.captureAndRead(service)
             if (ocr != null) {
-                Log.i(TAG, "Price reading OCR: ${ocr.fullText.take(500)}")
+                SecureLog.verbose(TAG, "Price reading OCR: ${ocr.fullText.take(500)}")
 
                 // Try to find the ride type label — also check intercity variant
                 val intercityVariant = "$uberRideType Intercity"
@@ -1229,7 +1277,7 @@ object UberScript {
                         val rawPrice = ScreenReader.sanitizePrice(match.groupValues[1])
                         val price = normalizePrice(rawPrice)
                         allPrices.add(Triple(price, block.bounds, text))
-                        Log.i(TAG, "Found price: LKR $price at Y=${block.bounds?.centerY()} (raw: '$text')")
+                        SecureLog.i(TAG, "Found price: LKR $price at Y=${block.bounds?.centerY()} (raw: '$text')")
                     }
                 }
 
@@ -1246,7 +1294,7 @@ object UberScript {
                     } else Int.MAX_VALUE
                 }!!
                 val price = matched.first
-                Log.i(TAG, "Matched price for '$uberRideType': LKR $price " +
+                SecureLog.i(TAG, "Matched price for '$uberRideType': LKR $price " +
                         "(Y-distance=${matched.second?.let { kotlin.math.abs(it.centerY() - rideBounds.centerY()) }}, " +
                         "raw: '${matched.third}')")
 
@@ -1278,7 +1326,7 @@ object UberScript {
                             Log.w(TAG, "Price changed between reads: $price → ${matched2.first}, retrying")
                             return@AutomationStep StepResult.Retry("Price unstable")
                         }
-                        Log.i(TAG, "Price confirmed stable: LKR $price")
+                        SecureLog.i(TAG, "Price confirmed stable: LKR $price")
                     }
                 }
 
@@ -1329,7 +1377,7 @@ object UberScript {
 
             val ocr = ScreenReader.captureAndRead(service)
             if (ocr != null) {
-                Log.i(TAG, "Ride options screen: ${ocr.fullText.take(400)}")
+                SecureLog.verbose(TAG, "Ride options screen: ${ocr.fullText.take(400)}")
 
                 // Check if already selected (Choose button shows our type or intercity variant)
                 val chooseText = "Choose $uberRideType"

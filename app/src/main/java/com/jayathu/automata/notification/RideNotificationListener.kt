@@ -4,6 +4,7 @@ import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
 import com.jayathu.automata.data.model.RideApp
+import com.jayathu.automata.engine.SecureLog
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -75,7 +76,7 @@ class RideNotificationListener : NotificationListenerService() {
         val text = extras.getCharSequence("android.text")?.toString() ?: ""
         val fullText = "$title $text".lowercase()
 
-        Log.d(TAG, "Notification from ${app.displayName}: title=$title, text=$text")
+        SecureLog.verbose(TAG, "Notification from ${app.displayName}: title=$title, text=$text")
 
         val keywords = when (app) {
             RideApp.PICKME -> PICKME_CONFIRM_KEYWORDS

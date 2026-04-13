@@ -45,6 +45,7 @@ object ErrorMapper {
             stepName.contains("Force-close", true) -> "Preparing apps"
             stepName.contains("home screen", true) -> "Navigating"
             stepName.contains("Check winner", true) || stepName.contains("Set winner", true) -> "Deciding best ride"
+            stepName.contains("rides availability", true) -> "Checking PickMe availability"
             stepName.contains("location services", true) -> "Checking location"
             stepName.contains("Verify", true) && stepName.contains("installed", true) -> "Checking app"
             stepName.contains("Handle", true) && stepName.contains("prompt", true) -> "Handling popup"
@@ -95,6 +96,19 @@ object ErrorMapper {
             return Pair(
                 "$app could not be opened.",
                 "Make sure $app is installed and up to date."
+            )
+        }
+
+        // App not set up / registration incomplete
+        if (reason.contains("not set up", true) || reason.contains("complete the registration", true)) {
+            val app = when {
+                stepName.contains("PickMe", true) -> "PickMe"
+                stepName.contains("Uber", true) -> "Uber"
+                else -> "The app"
+            }
+            return Pair(
+                "$app needs to be set up first.",
+                "Open $app manually, complete the sign-up process, and try again."
             )
         }
 
@@ -217,6 +231,11 @@ object ErrorMapper {
                 Pair(
                     "Failed to read the price after several tries.",
                     "The app may be loading slowly. Try again."
+                )
+            stepName.contains("rides availability", true) ->
+                Pair(
+                    "PickMe rides are currently not available.",
+                    "This is a temporary issue with PickMe. Try again later."
                 )
             stepName.contains("ride options", true) ->
                 Pair(
